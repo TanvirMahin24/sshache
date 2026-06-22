@@ -1,188 +1,107 @@
-@import "@xterm/xterm/css/xterm.css";
-
-:root {
-  --bg: #0e1116;
-  --bg-2: #151a21;
-  --bg-3: #1c232c;
-  --line: #232c37;
-  --fg: #e6edf3;
-  --fg-dim: #8b98a5;
-  --accent: #4f9cf9;
-  --accent-2: #2d7ff0;
-  --danger: #f4584e;
-  --radius: 10px;
+/* Global shell for SSH Ache. Component styling is inline (ported from the
+   Claude Design mock); this file holds the reset, scrollbar, and keyframes. */
+* {
+  box-sizing: border-box;
 }
-
-* { box-sizing: border-box; }
-
-html, body {
+html,
+body {
   margin: 0;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--fg);
-  overflow: hidden;
-  -webkit-font-smoothing: antialiased;
+  background: #09090b;
+}
+#root {
+  height: 100%;
 }
 
-#app {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  height: 100vh;
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: #26262e;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a46;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-/* sidebar */
-#sidebar {
-  background: var(--bg-2);
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  padding: 14px 12px;
-  gap: 12px;
+@keyframes acaSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-weight: 600;
-  font-size: 16px;
-  padding: 4px 6px;
+@keyframes acaToast {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.brand .logo { color: var(--accent); }
-
-.sidebar-foot {
-  margin-top: auto;
-  font-size: 11px;
-  color: var(--fg-dim);
-  text-align: center;
-  padding: 6px;
+@keyframes acaModal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-
-#host-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  flex: 1;
+@keyframes acaFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
-
-.host {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 10px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--fg);
-  border: 1px solid transparent;
-  transition: background .12s, border-color .12s;
+@keyframes acaPulse {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
 }
-.host:hover { background: var(--bg-3); }
-.host.active { background: var(--bg-3); border-color: var(--accent); }
-.host .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--fg-dim); flex: none;
+@keyframes acaShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  18% {
+    transform: translateX(-7px);
+  }
+  36% {
+    transform: translateX(6px);
+  }
+  54% {
+    transform: translateX(-5px);
+  }
+  72% {
+    transform: translateX(4px);
+  }
+  88% {
+    transform: translateX(-2px);
+  }
 }
-.host.connected .dot { background: #3fb950; }
-.host .meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.host .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.host .sub { font-size: 11px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.host .del {
-  opacity: 0; border: none; background: none; color: var(--fg-dim);
-  cursor: pointer; font-size: 15px; padding: 0 2px;
+@keyframes acaRise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.host:hover .del { opacity: 1; }
-.host .del:hover { color: var(--danger); }
-.host .edit {
-  opacity: 0; border: none; background: none; color: var(--fg-dim);
-  cursor: pointer; font-size: 13px; padding: 0 2px;
-}
-.host:hover .edit { opacity: 1; }
-.host .edit:hover { color: var(--accent); }
-
-/* main */
-#main { display: flex; flex-direction: column; min-width: 0; }
-
-#tabbar {
-  height: 38px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--fg-dim);
-  background: var(--bg-2);
-}
-
-#term-wrap { position: relative; flex: 1; min-height: 0; background: var(--bg); }
-#terminal { position: absolute; inset: 0; padding: 8px 10px; }
-
-#welcome {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  color: var(--fg-dim);
-  pointer-events: none;
-}
-#welcome h1 { margin: 0; font-size: 34px; color: var(--fg); letter-spacing: -1px; }
-#welcome.hidden { display: none; }
-
-/* buttons */
-button {
-  font: inherit;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--bg-3);
-  color: var(--fg);
-  padding: 8px 12px;
-  cursor: pointer;
-  transition: background .12s, border-color .12s;
-}
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
-button.primary:hover { background: var(--accent); }
-
-/* modals */
-#modal, #pw-modal {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,.55);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 10;
-  backdrop-filter: blur(2px);
-}
-.hidden { display: none !important; }
-
-form {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 22px;
-  width: 340px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.5);
-}
-form h2 { margin: 0 0 4px; font-size: 18px; }
-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--fg-dim); }
-form input, form select {
-  font: inherit;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--fg);
-  padding: 9px 10px;
-}
-form input:focus, form select:focus { outline: none; border-color: var(--accent); }
-form .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-form .hint { margin: 0; font-size: 11px; color: var(--fg-dim); }

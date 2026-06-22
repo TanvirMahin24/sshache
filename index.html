@@ -3,65 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>sshache</title>
+    <title>SSH Ache</title>
+    <!-- JetBrains Mono is vendored via @fontsource (imported in main.tsx) — no CDN, fully offline. -->
   </head>
   <body>
-    <div id="app">
-      <aside id="sidebar">
-        <div class="brand">
-          <span class="logo">▮</span>
-          <span>sshache</span>
-        </div>
-        <button id="new-host" class="primary">+ New host</button>
-        <ul id="host-list"></ul>
-        <div class="sidebar-foot">local-only · open source</div>
-      </aside>
-      <main id="main">
-        <div id="tabbar"></div>
-        <div id="term-wrap">
-          <div id="welcome">
-            <h1>sshache</h1>
-            <p>Pick a host, or add one. Nothing leaves this machine.</p>
-          </div>
-          <div id="terminal"></div>
-        </div>
-      </main>
-    </div>
-
-    <div id="modal" class="hidden">
-      <form id="host-form">
-        <h2 id="form-title">New host</h2>
-        <label>Name <input name="name" placeholder="my-server" /></label>
-        <label>Host <input name="host" placeholder="192.168.1.10" required /></label>
-        <label>Port <input name="port" type="number" value="22" required /></label>
-        <label>User <input name="user" placeholder="root" required /></label>
-        <label>Auth
-          <select name="auth">
-            <option value="password">Password</option>
-            <option value="key">Private key</option>
-            <option value="agent">SSH agent</option>
-          </select>
-        </label>
-        <label class="key-only hidden">Key path <input name="keyPath" placeholder="~/.ssh/id_ed25519" /></label>
-        <div class="row">
-          <button type="button" id="cancel">Cancel</button>
-          <button type="submit" class="primary">Save</button>
-        </div>
-      </form>
-    </div>
-
-    <div id="pw-modal" class="hidden">
-      <form id="pw-form">
-        <h2 id="pw-title">Password</h2>
-        <label><span id="pw-label">Password</span> <input name="password" type="password" autocomplete="off" /></label>
-        <p class="hint" id="pw-hint">Not stored. Typed per connection.</p>
-        <div class="row">
-          <button type="button" id="pw-cancel">Cancel</button>
-          <button type="submit" class="primary">Connect</button>
-        </div>
-      </form>
-    </div>
-
-    <script type="module" src="/src/main.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
