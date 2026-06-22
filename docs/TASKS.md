@@ -1,7 +1,7 @@
 # SSH Ache — Build Plan
 
 Staged plan to turn the Claude Design mock (`SSH Ache.dc.html`, in the handoff
-bundle) into a fully functional local-first SSH client. Build phase by phase —
+bundle) into a fully functional desktop SSH client. Build phase by phase —
 do **not** land it all at once.
 
 Legend: ☐ todo · ◑ partial · ☑ done

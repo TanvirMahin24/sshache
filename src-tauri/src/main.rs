@@ -1118,6 +1118,27 @@ fn mcp_approval_respond(state: State<'_, McpState>, id: u64, allow: bool) {
     }
 }
 
+// Open a URL in the user's default browser/mail client. Only http(s)/mailto are
+// allowed so a stray value can't be coerced into running a local program.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let ok = url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:");
+    if !ok {
+        return Err("unsupported url scheme".into());
+    }
+    #[cfg(target_os = "macos")]
+    let prog = "open";
+    #[cfg(target_os = "windows")]
+    let prog = "explorer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let prog = "xdg-open";
+    std::process::Command::new(prog)
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1157,7 +1178,8 @@ fn main() {
             mcp_start,
             mcp_stop,
             mcp_status,
-            mcp_approval_respond
+            mcp_approval_respond,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

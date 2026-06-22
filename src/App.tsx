@@ -14,6 +14,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import logoMark from "./assets/logo-mark.svg";
 
 type S = React.CSSProperties;
 
@@ -54,6 +55,21 @@ const dedupeBorder = (st: any): S => {
 
 // ---- persistence: file store in Tauri, localStorage in the browser ----
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const AUTHOR = {
+  name: "Noor Ajmir Tanvir",
+  github: "https://github.com/TanvirMahin24",
+  email: "tanvirmahin24@gmail.com",
+  site: "https://tanvirmahin.com",
+  tip: "https://www.patreon.com/cw/tanvirmahin24",
+  motto: "Don't be so busy making a living that you forget to actually make a life.",
+};
+// Open a link in the OS browser. Tauri webview won't honour target=_blank, so
+// route through the open_url command there; plain window.open in the browser.
+const openExt = (url: string) => {
+  if (isTauri) invoke("open_url", { url }).catch(() => {});
+  else window.open(url, "_blank", "noopener");
+};
 
 const loadCfg = async (name: string): Promise<string> => {
   if (isTauri) { try { return await invoke<string>("read_config", { name }); } catch (_) { return ""; } }
@@ -341,6 +357,7 @@ export default class App extends React.Component<any, any> {
     sftpOpen: false,
     paletteOpen: false,
     themesOpen: false,
+    aboutOpen: false,
     paletteQuery: '',
     themeId: 'ember',
     view: 'dashboard',
@@ -391,7 +408,7 @@ export default class App extends React.Component<any, any> {
     tabs: [
       { id:'t1', title:'production-web', host:'production-web', user:'root', addr:'10.0.4.21', layout:'row', sizes:[100], panes:[
         { id:'p1', user:'root', host:'production-web', cwd:'~', input:'', lines:[
-          { t:'sys', x:'SSH Ache 0.4.0 · local-first terminal — no telemetry, no cloud sync' },
+          { t:'sys', x:'SSH Ache 0.4.0 · terminal session' },
           { t:'ok',  x:'● secure channel established · root@10.0.4.21 (production-web)' },
           { t:'cmd', x:'❯ uptime' },
           { t:'out', x:' 14:22:07 up 37 days,  load average: 0.18, 0.22, 0.20' },
@@ -403,7 +420,7 @@ export default class App extends React.Component<any, any> {
     ]
   };
 
-  // Local-first persistence. Synchronous localStorage hydrate on construct (works
+  // On-device persistence. Synchronous localStorage hydrate on construct (works
   // in the browser preview and as a Tauri migration source); componentDidMount
   // then loads the authoritative on-disk file in the desktop app. Sessions
   // (tabs/panes) stay ephemeral. Secrets are never part of this blob.
@@ -440,7 +457,7 @@ export default class App extends React.Component<any, any> {
       else if (meta && k === 'n') { e.preventDefault(); this.openAddHost(); }
       else if (meta && k === '1') { e.preventDefault(); this.setState({ view: 'dashboard' }); }
       else if (meta && k === '2') { e.preventDefault(); this.setState({ view: 'workspace' }); }
-      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false }); }
+      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false }); }
     };
     window.addEventListener('keydown', this._key);
     // Authoritative load from the on-disk store (Tauri); redundant in browser.
@@ -715,7 +732,7 @@ export default class App extends React.Component<any, any> {
       { t:'accent', x:'   └─┐└─┐├─┤  ├─┤│  ├─┤├┤ ' },
       { t:'accent', x:'   └─┘└─┘┴ ┴  ┴ ┴└─┘┴ ┴└─┘' },
       { t:'dim', x:'' },
-      { t:'out', x:'  os      SSH Ache 0.4.0 (local-first)' },
+      { t:'out', x:'  os      SSH Ache 0.4.0' },
       { t:'out', x:'  shell   zsh 5.9' },
       { t:'out', x:'  term    truecolor · 256 themes' },
       { t:'out', x:'  cloud   none — fully offline' },
@@ -1479,6 +1496,10 @@ export default class App extends React.Component<any, any> {
       setPaletteQuery: (e) => this.setState({ paletteQuery: e.target.value }),
       openThemes: () => this.setState({ themesOpen: true }),
       closeThemes: () => this.setState({ themesOpen: false }),
+      aboutOpen: s.aboutOpen,
+      openAbout: () => this.setState({ aboutOpen: true }),
+      closeAbout: () => this.setState({ aboutOpen: false }),
+      author: AUTHOR, openExt,
       newTab: () => this.newTab(),
       splitRight: this.splitRight, splitDown: this.splitDown,
       cancelConnect: this.cancelConnect,
@@ -1627,10 +1648,9 @@ export default class App extends React.Component<any, any> {
         {/* TITLE BAR */}
         <div data-tauri-drag-region style={css("height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;background:#0a0a0d;border-bottom:1px solid #16161c;")}>
           <div style={css("display:flex;align-items:center;gap:9px;")}>
-            <span style={css("width:14px;height:14px;background:#ff7a59;border-radius:3px;transform:rotate(45deg);box-shadow:0 0 12px rgba(255,122,89,.55);")}></span>
+            <img src={logoMark} width="20" height="20" alt="SSH Ache" style={{ borderRadius: "6px", boxShadow: "0 0 12px rgba(255,77,112,.45)" }} />
             <span style={css("font-weight:700;font-size:13px;letter-spacing:.01em;color:#f2f2f5;")}>SSH&nbsp;Ache</span>
             <span style={css("font-size:10px;color:#6a6a74;border:1px solid #26262e;border-radius:4px;padding:1px 5px;")}>v0.4.0</span>
-            <span style={css("font-size:9px;letter-spacing:.12em;color:#46d9a0;border:1px solid rgba(70,217,160,.28);border-radius:4px;padding:2px 6px;background:rgba(70,217,160,.06);")}>LOCAL-FIRST</span>
           </div>
           <span data-tauri-drag-region style={css("flex:1;")}></span>
           <div style={css("display:flex;align-items:center;gap:7px;")}>
@@ -1643,6 +1663,12 @@ export default class App extends React.Component<any, any> {
               <span style={css("width:9px;height:9px;border-radius:50%;background:#46d9a0;margin-left:-4px;")}></span>
             </Hov>
             <Hov onClick={v.toggleSftp} title="SFTP" s="padding:6px 10px;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;color:#b9b9c2;font-size:11px;" h="background:#15151b;color:#ededf0;">⇅&nbsp;SFTP</Hov>
+            <Hov onClick={v.openAbout} title="About · support the author" s="width:32px;height:28px;display:flex;align-items:center;justify-content:center;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;" h="background:#15151b;border-color:rgba(255,95,109,.4);">
+              <svg width="15" height="15" viewBox="0 0 24 24" className="aca-heart" aria-hidden="true">
+                <defs><linearGradient id="acaHeartGrad" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse"><stop stopColor="#ff8a63"/><stop offset="1" stopColor="#ff3d7f"/></linearGradient></defs>
+                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="url(#acaHeartGrad)"/>
+              </svg>
+            </Hov>
           </div>
           <div style={css("display:flex;gap:3px;margin-left:4px;align-items:center;")}>
             <Hov onClick={v.winMin} title="Minimize" s="width:26px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;cursor:pointer;" h="background:#15151b;">
@@ -1694,7 +1720,7 @@ export default class App extends React.Component<any, any> {
                 </Hov>
                 <div style={css("display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:10px;color:#54545e;")}>
                   <span style={css("width:6px;height:6px;border-radius:50%;background:#46d9a0;box-shadow:0 0 6px rgba(70,217,160,.6);")}></span>
-                  <span>encrypted at rest · no telemetry</span>
+                  <span>encrypted at rest</span>
                 </div>
                 <div style={css("display:flex;gap:7px;")}>
                   <Hov as="button" onClick={v.openThemes} s="flex:1;padding:7px 8px;background:#101015;border:1px solid #20202a;border-radius:6px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Themes</Hov>
@@ -1908,7 +1934,7 @@ export default class App extends React.Component<any, any> {
               <span style={css("flex:1;")}></span>
               <span>UTF-8</span>
               <span>LF</span>
-              <span style={css("color:#46d9a0;")}>● offline · no telemetry</span>
+              <span style={css("color:#46d9a0;")}>● ready</span>
             </div>
           </div>
         </div>
@@ -1969,6 +1995,35 @@ export default class App extends React.Component<any, any> {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ABOUT / AUTHOR */}
+        {v.aboutOpen && (
+          <div onClick={v.closeAbout} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:66;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:420px;max-width:96%;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:11px;padding:16px 20px;border-bottom:1px solid #18181f;")}>
+                <span style={css("font-size:13px;font-weight:700;color:#f2f2f5;")}>About</span>
+                <span style={css("flex:1;")}></span>
+                <Hov onClick={v.closeAbout} s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border:1px solid #26262e;border-radius:6px;cursor:pointer;" h="background:#16161c;color:#ededf0;">×</Hov>
+              </div>
+              <div style={css("padding:26px 22px 24px;display:flex;flex-direction:column;align-items:center;text-align:center;")}>
+                <img src={logoMark} width="80" height="80" alt="SSH Ache" style={{ borderRadius: "22px", boxShadow: "0 0 32px rgba(255,77,112,.42)" }} />
+                <div style={css("font-size:17px;font-weight:700;color:#f2f2f5;margin-top:15px;")}>{v.author.name}</div>
+                <div style={css("font-size:11.5px;color:#6a6a74;margin-top:3px;")}>Author &amp; developer of SSH&nbsp;Ache</div>
+                <div style={css("position:relative;margin-top:18px;padding:15px 18px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:12px;")}>
+                  <span style={css("position:absolute;top:-12px;left:12px;font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:1;color:#ff5f6d;opacity:.55;")}>&ldquo;</span>
+                  <div style={{ ...css("font-size:13px;font-style:italic;line-height:1.62;font-weight:600;"), background: "linear-gradient(120deg,#ff8a63,#ff5f6d,#ff3d7f)", WebkitBackgroundClip: "text", backgroundClip: "text", WebkitTextFillColor: "transparent" }}>{v.author.motto}</div>
+                </div>
+                <div style={css("display:flex;gap:8px;margin-top:20px;width:100%;")}>
+                  <Hov as="button" onClick={() => v.openExt(v.author.github)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">GitHub</Hov>
+                  <Hov as="button" onClick={() => v.openExt('mailto:' + v.author.email)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Email</Hov>
+                  <Hov as="button" onClick={() => v.openExt(v.author.site)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Website</Hov>
+                </div>
+                <Hov as="button" onClick={() => v.openExt(v.author.tip)} s="margin-top:11px;width:100%;padding:11px;background:linear-gradient(135deg,#ff7a59,#ff4f7a);border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;" h="filter:brightness(1.06);">☕&nbsp;Buy me a coffee</Hov>
+                <div style={css("font-size:10px;color:#54545e;margin-top:14px;")}>SSH&nbsp;Ache · v0.4.0</div>
               </div>
             </div>
           </div>
@@ -2185,7 +2240,7 @@ export default class App extends React.Component<any, any> {
                   <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:12px;")}>Local data</div>
                   <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;")}>
                     <span style={css("width:7px;height:7px;border-radius:50%;background:#46d9a0;box-shadow:0 0 7px rgba(70,217,160,.6);flex:none;")}></span>
-                    <span style={css("flex:1;font-size:11.5px;color:#9a9aa3;")}>Fully offline · no account · no telemetry</span>
+                    <span style={css("flex:1;font-size:11.5px;color:#9a9aa3;")}>Stored on this device, encrypted at rest</span>
                     <Hov as="button" onClick={v.onImport} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Import</Hov>
                     <Hov as="button" onClick={v.onExport} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Export</Hov>
                   </div>
@@ -2193,7 +2248,7 @@ export default class App extends React.Component<any, any> {
 
               </div>
               <div style={css("flex:none;display:flex;align-items:center;padding:14px 22px;border-top:1px solid #18181f;")}>
-                <span style={css("font-size:10.5px;color:#54545e;")}>SSH Ache v0.4.0 · MIT · open source</span>
+                <span style={css("font-size:10.5px;color:#54545e;")}>SSH Ache · v0.4.0</span>
                 <span style={css("flex:1;")}></span>
                 <Hov as="button" onClick={v.closeSettings} s="padding:9px 18px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Done</Hov>
               </div>

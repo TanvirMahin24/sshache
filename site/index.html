@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSH Ache — a desktop SSH client with a clean terminal UI</title>
+  <meta name="description" content="SSH Ache is a desktop SSH client with a clean terminal UI — connections, SFTP, port forwarding, and an approval-gated AI agent bridge, with your data kept on your machine and encrypted at rest." />
+  <meta name="theme-color" content="#0a0a0d" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="SSH Ache" />
+  <meta property="og:description" content="A desktop SSH client with a clean terminal UI — connections, SFTP, port forwarding, and an approval-gated AI agent bridge." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://sshache.com" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===================== Nav ===================== -->
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="index.html" aria-label="SSH Ache home">
+        <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
+        <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
+      </a>
+
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+        <span></span>
+      </button>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="#features">Features</a>
+        <a href="#security">Security</a>
+        <a href="#install">Install</a>
+        <a href="docs.html">Docs</a>
+        <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
+        <a class="nav-cta" href="#install">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- ===================== Hero ===================== -->
+    <section class="hero">
+      <div class="container">
+        <img class="wordmark" src="assets/logo-wordmark.svg" alt="SSH Ache" />
+        <h1>The SSH client that<br /><span class="gradient-text">keeps your data home.</span></h1>
+        <p class="lead">
+          A desktop SSH client with a clean terminal UI — connections, SFTP, port
+          forwarding, and an approval-gated AI agent bridge, with your data kept on
+          your machine and encrypted at rest.
+        </p>
+
+        <blockquote class="motto">
+          <span class="quote-mark">“</span>Don't be so busy making a living that you forget to actually make a life.<span class="quote-mark">”</span>
+        </blockquote>
+
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            Download
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.42c.58.11.79-.25.79-.56v-2c-3.2.7-3.88-1.36-3.88-1.36-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.76.4-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.2-3.1-.12-.3-.52-1.47.11-3.05 0 0 .98-.31 3.2 1.18a11.1 11.1 0 0 1 5.82 0c2.22-1.49 3.2-1.18 3.2-1.18.63 1.58.23 2.75.11 3.05.75.81 1.2 1.84 1.2 3.1 0 4.43-2.69 5.41-5.25 5.69.41.36.78 1.05.78 2.12v3.14c0 .31.21.68.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+        <p class="hero-note">Builds for macOS, Windows &amp; Linux.</p>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ===================== Features ===================== -->
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Features</span>
+          <h2>Everything you need in a <span class="gradient-text">terminal</span></h2>
+          <p>A real SSH workspace — sessions, files, tunnels, and an optional agent bridge — wrapped in one premium desktop app.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="card">
+            <div class="icon">🖥️</div>
+            <h3>Real terminal</h3>
+            <p>Full SSH sessions powered by russh + xterm.js — tabbed, with splittable panes, plus local shell tabs alongside your remote ones.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🗂️</div>
+            <h3>Host vault</h3>
+            <p>Saved hosts in folders with colours and favourites. Secrets stay in the OS keychain, and you can copy a ready-to-run <code>ssh</code> command per host.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🛡️</div>
+            <h3>Host-key verification</h3>
+            <p>First-connect fingerprint confirmation and <code>known_hosts</code> tracking, with a hard refusal and warning if a host key ever changes.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">📁</div>
+            <h3>SFTP browser</h3>
+            <p>Dual-pane local/remote navigation with drag-and-drop transfer of multiple files and whole folders, plus a replace/skip conflict prompt.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🔀</div>
+            <h3>Port forwarding</h3>
+            <p>Local forwards bridged over the SSH connection, so remote services reach you through a tunnel you control.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🎨</div>
+            <h3>Themes &amp; settings</h3>
+            <p>Community terminal themes with live controls for font size, cursor style, and scrollback — tuned to how you like to work.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🔐</div>
+            <h3>Encrypted backup</h3>
+            <p>Export and import your hosts and secrets to a password-encrypted file (PBKDF2 → AES-256-GCM) and restore on another machine.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">⏳</div>
+            <h3>Idle vault lock</h3>
+            <p>An optional passphrase lock that engages after inactivity, so an unattended window doesn't leave your vault open.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon">🤖</div>
+            <h3>AI agent access (MCP)</h3>
+            <p>An optional, off-by-default MCP server bound to localhost behind a bearer token — per-host opt-in, per-command approval, and secrets never reach the agent.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ===================== Security ===================== -->
+    <section class="section security" id="security">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Security</span>
+          <h2>Built to <span class="gradient-text">protect</span> your sessions</h2>
+          <p>Your connections, your secrets, and your files are guarded at every step — and they stay on your machine.</p>
+        </div>
+
+        <div class="sec-grid">
+          <div class="sec-item">
+            <div class="sec-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+            </div>
+            <div>
+              <h3>Host-key &amp; MITM protection</h3>
+              <p>First-connect fingerprints are confirmed and pinned in <code>known_hosts</code>. If a host key ever changes, SSH Ache refuses to connect and warns you — so a man-in-the-middle can't slip in.</p>
+            </div>
+          </div>
+
+          <div class="sec-item">
+            <div class="sec-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div>
+              <h3>Secrets in the OS keychain</h3>
+              <p>Passwords and keys are handed to your operating system's keychain instead of sitting in plaintext config — the platform's vault holds them, not a loose file.</p>
+            </div>
+          </div>
+
+          <div class="sec-item">
+            <div class="sec-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
+            </div>
+            <div>
+              <h3>Encrypted backups</h3>
+              <p>Export your hosts and secrets to a single password-encrypted file using PBKDF2 key derivation and AES-256-GCM. Move it between machines without exposing anything.</p>
+            </div>
+          </div>
+
+          <div class="sec-item">
+            <div class="sec-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            </div>
+            <div>
+              <h3>Approval-gated agent bridge</h3>
+              <p>The AI-agent / MCP bridge is off by default and bound to localhost behind a bearer token. Every host is opt-in and every command needs in-app approval — and your secrets never reach the agent.</p>
+            </div>
+          </div>
+        </div>
+
+        <p class="sec-foot">
+          <strong>Your data stays on your machine, encrypted at rest.</strong>
+          Nothing about your hosts or sessions is sent anywhere you didn't choose.
+        </p>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ===================== Install ===================== -->
+    <section class="section" id="install">
+      <div class="container">
+        <div class="section-head">
+          <span class="eyebrow">Install</span>
+          <h2>Get <span class="gradient-text">SSH Ache</span></h2>
+          <p>Install with Homebrew on macOS, or grab a build for your platform.</p>
+        </div>
+
+        <div class="install-wrap">
+          <div class="codebox">
+            <div class="codebox-bar">
+              <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+              <span class="label">Homebrew — macOS</span>
+            </div>
+            <div class="codebox-body">
+              <code id="brewCmd"><span class="prompt">$ </span><span class="cmd">brew install --cask TanvirMahin24/sshache/sshache</span></code>
+              <button class="copy-btn" id="copyBrew" data-copy="brew install --cask TanvirMahin24/sshache/sshache">Copy</button>
+            </div>
+          </div>
+
+          <p class="dl-head">Or download a build</p>
+
+          <!-- TODO: replace with direct asset links once releases are published -->
+          <div class="dl-row">
+            <a class="dl-card" href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">
+              <span class="os-ic">🍎</span>
+              <span class="os-name">macOS</span>
+              <span class="os-fmt">.dmg</span>
+            </a>
+            <a class="dl-card" href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">
+              <span class="os-ic">🪟</span>
+              <span class="os-name">Windows</span>
+              <span class="os-fmt">.msi</span>
+            </a>
+            <a class="dl-card" href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">
+              <span class="os-ic">🐧</span>
+              <span class="os-name">Linux</span>
+              <span class="os-fmt">.AppImage / .deb</span>
+            </a>
+          </div>
+
+          <p class="install-foot">
+            All builds live on the <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">GitHub Releases page</a>.
+            Prefer to build it yourself? See the <a href="docs.html#install">docs</a>.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== Footer ===================== -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-about">
+          <a class="brand" href="index.html" aria-label="SSH Ache home">
+            <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
+            <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
+          </a>
+          <p>A desktop SSH client with a clean terminal UI. Built by Noor Ajmir Tanvir.</p>
+          <a class="coffee" href="https://www.patreon.com/cw/tanvirmahin24" target="_blank" rel="noopener">Buy me a coffee ☕</a>
+        </div>
+
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Product</h4>
+            <a href="#features">Features</a>
+            <a href="#security">Security</a>
+            <a href="#install">Install</a>
+            <a href="docs.html">Documentation</a>
+          </div>
+          <div class="footer-col">
+            <h4>Project</h4>
+            <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">Releases</a>
+          </div>
+          <div class="footer-col">
+            <h4>Author</h4>
+            <a href="https://tanvirmahin.com" target="_blank" rel="noopener">tanvirmahin.com</a>
+            <a href="https://github.com/TanvirMahin24" target="_blank" rel="noopener">GitHub profile</a>
+            <a href="mailto:tanvirmahin24@gmail.com">tanvirmahin24@gmail.com</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> Noor Ajmir Tanvir · SSH Ache</span>
+        <a href="https://tanvirmahin.com" target="_blank" rel="noopener">tanvirmahin.com</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Mobile nav toggle
+    (function () {
+      var t = document.getElementById('navToggle');
+      var l = document.getElementById('navLinks');
+      if (t && l) {
+        t.addEventListener('click', function () {
+          var open = l.classList.toggle('open');
+          t.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        l.addEventListener('click', function (e) {
+          if (e.target.tagName === 'A') {
+            l.classList.remove('open');
+            t.setAttribute('aria-expanded', 'false');
+          }
+        });
+      }
+    })();
+
+    // Copy Homebrew command
+    (function () {
+      var btn = document.getElementById('copyBrew');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy');
+        navigator.clipboard.writeText(text).then(function () {
+          var prev = btn.textContent;
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(function () {
+            btn.textContent = prev;
+            btn.classList.remove('copied');
+          }, 1600);
+        });
+      });
+    })();
+
+    // Footer year
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

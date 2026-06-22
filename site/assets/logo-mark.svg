@@ -1,0 +1,38 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SSH Ache logo">
+  <defs>
+    <linearGradient id="ache-bg" x1="28" y1="20" x2="228" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff8a63"/>
+      <stop offset="0.55" stop-color="#ff5f6d"/>
+      <stop offset="1" stop-color="#ff3d7f"/>
+    </linearGradient>
+    <linearGradient id="ache-heart" x1="64" y1="48" x2="192" y2="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff7f2"/>
+      <stop offset="1" stop-color="#ffe1d4"/>
+    </linearGradient>
+    <filter id="ache-soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <clipPath id="ache-clip">
+      <path d="M128 196 C118 176 92 158 74 140 C56 122 48 104 48 86 C48 66 64 52 84 52 C104 52 120 66 128 84 C136 66 152 52 172 52 C192 52 208 66 208 86 C208 104 200 122 182 140 C164 158 138 176 128 196 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- app tile -->
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#ache-bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="#ffffff" opacity="0.06"/>
+
+  <!-- glow behind the heart -->
+  <path d="M128 196 C118 176 92 158 74 140 C56 122 48 104 48 86 C48 66 64 52 84 52 C104 52 120 66 128 84 C136 66 152 52 172 52 C192 52 208 66 208 86 C208 104 200 122 182 140 C164 158 138 176 128 196 Z" fill="#ff2f6e" opacity="0.5" filter="url(#ache-soft)"/>
+
+  <!-- heart -->
+  <path d="M128 196 C118 176 92 158 74 140 C56 122 48 104 48 86 C48 66 64 52 84 52 C104 52 120 66 128 84 C136 66 152 52 172 52 C192 52 208 66 208 86 C208 104 200 122 182 140 C164 158 138 176 128 196 Z" fill="url(#ache-heart)"/>
+
+  <!-- embossed ECG / heartbeat pulse, clipped inside the heart -->
+  <g clip-path="url(#ache-clip)">
+    <path d="M40 122 H100 l13 -42 l18 86 l15 -58 l11 16 H216" stroke="#ff9d7e" stroke-width="12" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+    <path d="M40 122 H100 l13 -42 l18 86 l15 -58 l11 16 H216" stroke="#ff7a59" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" fill="none" opacity="0.45"/>
+  </g>
+
+  <!-- top-left sheen on the heart -->
+  <path d="M84 56 C70 58 60 68 58 82" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+</svg>
