@@ -135,6 +135,28 @@ function Hov(props: any) {
   );
 }
 
+// Sidebar folder row: hover reveals a favourite star (left) and an edit icon
+// (right); a favourited folder shows the star permanently.
+function FolderRow({ folder }: any) {
+  const [h, setH] = React.useState(false);
+  const showStar = folder.favorite || h;
+  return (
+    <div onClick={folder.onSelect} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} style={folder.style}>
+      <span onClick={(e) => { e.stopPropagation(); folder.onToggleFav(); }} title="Favorite folder"
+        style={{ width: "13px", flex: "none", textAlign: "center", fontSize: "11px", cursor: "pointer", color: folder.favorite ? "#ffcf5c" : "#6a6a74", opacity: showStar ? 1 : 0 }}>
+        {folder.favorite ? "★" : "☆"}
+      </span>
+      <span style={{ fontSize: "11px", flex: "none", width: "14px", textAlign: "center", color: folder.color }}>▸</span>
+      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
+      {h ? (
+        <span onClick={(e) => { e.stopPropagation(); folder.onEdit(); }} title="Edit folder" style={{ flex: "none", fontSize: "11px", cursor: "pointer", color: "#9a9aa3" }}>✎</span>
+      ) : (
+        <span style={{ flex: "none", fontSize: "10px", color: folder.countColor }}>{folder.count}</span>
+      )}
+    </div>
+  );
+}
+
 // Map a theme to an xterm 16-colour palette. bg/fg/cursor track the theme and
 // `blue` is tinted with the accent. ponytail: the rest is a fixed dark ANSI set
 // — per-theme ANSI palettes would need colour data the design themes don't carry.
@@ -339,6 +361,8 @@ export default class App extends React.Component<any, any> {
     unlockValue: '',
     fwdPrompt: null,
     forwards: [],
+    folderMeta: {},
+    folderEdit: null,
     transfer: null,
     dragOver: null,
     toasts: [],
@@ -385,6 +409,7 @@ export default class App extends React.Component<any, any> {
       settings: { ...base.settings, ...(d.settings || {}) },
       themeId: this.THEMES[d.themeId] ? d.themeId : base.themeId,
       sidebarOpen: typeof d.sidebarOpen === 'boolean' ? d.sidebarOpen : base.sidebarOpen,
+      folderMeta: (d.folderMeta && typeof d.folderMeta === 'object') ? d.folderMeta : base.folderMeta,
     };
   }
 
@@ -486,12 +511,13 @@ export default class App extends React.Component<any, any> {
       this.paletteRef.current.focus();
     }
     const openHosts = (st) => Array.from(new Set(st.tabs.flatMap(t => t.panes.filter(p => p.live).map(p => p.host && p.host.id)).filter(Boolean)));
-    const keys = ['hosts', 'settings', 'themeId', 'sidebarOpen'];
+    const keys = ['hosts', 'settings', 'themeId', 'sidebarOpen', 'folderMeta'];
     const cur = openHosts(this.state);
     if (keys.some(k => this.state[k] !== prevState[k]) || JSON.stringify(cur) !== JSON.stringify(openHosts(prevState))) {
       saveCfg('state', JSON.stringify({
         hosts: this.state.hosts, settings: this.state.settings,
-        themeId: this.state.themeId, sidebarOpen: this.state.sidebarOpen, openHosts: cur,
+        themeId: this.state.themeId, sidebarOpen: this.state.sidebarOpen,
+        folderMeta: this.state.folderMeta, openHosts: cur,
       }));
     }
   }
@@ -907,6 +933,23 @@ export default class App extends React.Component<any, any> {
         keyMode: h.keyMode || 'file', keyPath: h.keyPath || '', keyText: h.keyText || '', passphrase:'',
         folder:h.folder, tagInput:'', tags:[...h.tags] } });
   }
+  // Build an `ssh` command line for use in another terminal / tool.
+  sshCommand(h) {
+    const parts = ['ssh'];
+    if (h.port && String(h.port) !== '22') parts.push('-p', String(h.port));
+    if ((h.auth || 'password') === 'key' && h.keyPath) parts.push('-i', h.keyPath);
+    parts.push((h.user || 'root') + '@' + h.addr);
+    return parts.join(' ');
+  }
+  copyCommand(h) {
+    const cmd = this.sshCommand(h);
+    const ok = () => this.pushToast({ type: 'ok', title: 'Command copied', msg: cmd });
+    try {
+      navigator.clipboard.writeText(cmd).then(ok).catch(() => this.pushToast({ type: 'info', title: 'Copy this command', msg: cmd }));
+    } catch (e) {
+      this.pushToast({ type: 'info', title: 'Copy this command', msg: cmd });
+    }
+  }
   closeAddHost() { this.setState({ addHostOpen: false, editingId: null }); }
   setField(key, val) { this.setState(s => ({ form: { ...s.form, [key]: val } })); }
   addTagFromInput() {
@@ -1000,6 +1043,35 @@ export default class App extends React.Component<any, any> {
   setFolder(f) { this.setState({ activeFolder: f, view: 'dashboard' }); }
   toggleTag(t) {
     this.setState(s => ({ activeTags: s.activeTags.includes(t) ? s.activeTags.filter(x => x !== t) : [...s.activeTags, t] }));
+  }
+
+  // ---- folder colour / favourites ----
+  toggleFolderFav(name) {
+    this.setState(s => { const m = { ...(s.folderMeta[name] || {}) }; m.favorite = !m.favorite; return { folderMeta: { ...s.folderMeta, [name]: m } }; });
+  }
+  toggleHostFav(id) {
+    this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, favorite: !h.favorite } : h) }));
+  }
+  openFolderEdit(name) {
+    const m = this.state.folderMeta[name] || {};
+    this.setState({ folderEdit: { name, newName: name, color: m.color || '', favorite: !!m.favorite } });
+  }
+  setFolderEdit(k, v) { this.setState(s => ({ folderEdit: s.folderEdit ? { ...s.folderEdit, [k]: v } : null })); }
+  saveFolderEdit() {
+    const fe = this.state.folderEdit;
+    if (!fe) return;
+    const oldName = fe.name, newName = (fe.newName || '').trim() || oldName;
+    this.setState(s => {
+      let hosts = s.hosts, folderMeta = { ...s.folderMeta }, activeFolder = s.activeFolder;
+      if (newName !== oldName) {
+        hosts = s.hosts.map(h => h.folder === oldName ? { ...h, folder: newName } : h);
+        delete folderMeta[oldName];
+        if (activeFolder === oldName) activeFolder = newName;
+      }
+      folderMeta[newName] = { color: fe.color || '', favorite: !!fe.favorite };
+      return { hosts, folderMeta, folderEdit: null, activeFolder };
+    });
+    this.pushToast({ type: 'ok', title: 'Folder updated', msg: newName });
   }
 
   renderVals() {
@@ -1154,10 +1226,18 @@ export default class App extends React.Component<any, any> {
     const folderItemStyle = (on) => ({ display:'flex', alignItems:'center', gap:'9px', padding:'7px 9px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: on ? '#ededf0' : '#9a9aa3', background: on ? '#15151b' : 'transparent', border:'1px solid ' + (on ? '#26262e' : 'transparent') });
     const allActive = s.activeFolder === 'all';
     const allFolder = { count: s.hosts.length, active: allActive, style: folderItemStyle(allActive), onSelect: () => this.setFolder('all') };
+    const folderColorOf = (name) => { const m = s.folderMeta[name]; return (m && m.color) || '#ff7a59'; };
     const folders = folderNames.map(name => {
       const on = s.activeFolder === name;
-      return { name, count: s.hosts.filter(h => h.folder === name).length, active: on, style: folderItemStyle(on), countStyle: { fontSize:'10px', color: on ? '#ff7a59' : '#54545e' }, onSelect: () => this.setFolder(name) };
+      const meta = s.folderMeta[name] || {};
+      const color = folderColorOf(name);
+      return {
+        name, count: s.hosts.filter(h => h.folder === name).length, active: on, favorite: !!meta.favorite, color,
+        style: folderItemStyle(on), countColor: on ? color : '#54545e',
+        onSelect: () => this.setFolder(name), onToggleFav: () => this.toggleFolderFav(name), onEdit: () => this.openFolderEdit(name),
+      };
     });
+    folders.sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
 
     const tagSet = [];
     s.hosts.forEach(h => h.tags.forEach(t => { if (!tagSet.includes(t)) tagSet.push(t); }));
@@ -1183,12 +1263,21 @@ export default class App extends React.Component<any, any> {
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
         cardStyle: { display:'flex', flexDirection:'column', gap:'10px', padding:'15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : '#1c1c24'), borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
         onConnect: () => this.connectHost(h),
-        onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); }
+        onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
+        onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
+        favorite: !!h.favorite,
+        onToggleFav: (e) => { e.stopPropagation(); this.toggleHostFav(h.id); },
       };
     };
+    // Favourite connections float into a group at the top; the rest group by folder.
+    const favHosts = filtered.filter(h => h.favorite);
+    const restHosts = filtered.filter(h => !h.favorite);
     const groupNames = [];
-    filtered.forEach(h => { if (!groupNames.includes(h.folder)) groupNames.push(h.folder); });
-    const groups = groupNames.map(name => ({ folder: name, count: filtered.filter(h => h.folder === name).length, cards: filtered.filter(h => h.folder === name).map(mkCard) }));
+    restHosts.forEach(h => { if (!groupNames.includes(h.folder)) groupNames.push(h.folder); });
+    const folderGroups = groupNames.map(name => ({ folder: name, color: folderColorOf(name), count: restHosts.filter(h => h.folder === name).length, cards: restHosts.filter(h => h.folder === name).map(mkCard) }));
+    const groups = favHosts.length
+      ? [{ folder: '★ Favorites', color: '#ffcf5c', count: favHosts.length, cards: favHosts.map(mkCard) }, ...folderGroups]
+      : folderGroups;
 
     // ---------- ADD HOST FORM ----------
     const f = s.form;
@@ -1271,6 +1360,16 @@ export default class App extends React.Component<any, any> {
       hasTags: tagSet.length > 0,
       searchValue: s.search, onSearch: (e) => this.setSearch(e.target.value), clearSearch: () => this.setSearch(''),
       activeFolderLabel: s.activeFolder === 'all' ? 'All connections' : s.activeFolder,
+      folderEditOpen: !!s.folderEdit,
+      folderEditName: s.folderEdit ? s.folderEdit.newName : '',
+      folderEditColor: s.folderEdit ? s.folderEdit.color : '',
+      folderEditFav: s.folderEdit ? !!s.folderEdit.favorite : false,
+      onFolderEditName: (e) => this.setFolderEdit('newName', e.target.value),
+      pickFolderColor: (c) => this.setFolderEdit('color', c),
+      toggleFolderEditFav: () => this.setFolderEdit('favorite', !(this.state.folderEdit && this.state.folderEdit.favorite)),
+      saveFolderEdit: () => this.saveFolderEdit(),
+      cancelFolderEdit: () => this.setState({ folderEdit: null }),
+      folderPalette: ['#ff7a59', '#ffcf5c', '#46d9a0', '#6ea8ff', '#bd93f9', '#ff6b78', '#f5c2e7', '#88c0d0'],
 
       // add host
       addHostOpen: s.addHostOpen, openAddHost: () => this.openAddHost(), closeAddHost: () => this.closeAddHost(),
@@ -1422,11 +1521,7 @@ export default class App extends React.Component<any, any> {
                   <span style={css("font-size:10px;color:#54545e;")}>{v.allFolder.count}</span>
                 </div>
                 {v.folders.map((folder) => (
-                  <div key={folder.name} onClick={folder.onSelect} style={folder.style}>
-                    <span style={css("font-size:11px;flex:none;width:16px;text-align:center;color:#ff7a59;")}>▸</span>
-                    <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{folder.name}</span>
-                    <span style={folder.countStyle}>{folder.count}</span>
-                  </div>
+                  <FolderRow key={folder.name} folder={folder} />
                 ))}
               </div>
               <div style={css("padding:10px;border-top:1px solid #14141a;display:flex;flex-direction:column;gap:7px;")}>
@@ -1478,7 +1573,7 @@ export default class App extends React.Component<any, any> {
                   {v.groups.map((group) => (
                     <div key={group.folder} style={css("margin-bottom:24px;")}>
                       <div style={css("display:flex;align-items:center;gap:8px;margin-bottom:12px;")}>
-                        <span style={css("font-size:11px;letter-spacing:.04em;color:#ff7a59;text-transform:uppercase;")}>{group.folder}</span>
+                        <span style={{ fontSize: '11px', letterSpacing: '.04em', color: group.color, textTransform: 'uppercase' }}>{group.folder}</span>
                         <span style={css("font-size:10px;color:#54545e;border:1px solid #20202a;border-radius:9px;padding:0 6px;")}>{group.count}</span>
                         <span style={css("flex:1;height:1px;background:#15151b;")}></span>
                       </div>
@@ -1488,6 +1583,8 @@ export default class App extends React.Component<any, any> {
                             <div style={css("display:flex;align-items:center;gap:9px;")}>
                               <span style={card.dotStyle}></span>
                               <span style={css("flex:1;font-size:13.5px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
+                              <Hov onClick={card.onToggleFav} title="Favorite" s={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#6a6a74', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
+                              <Hov onClick={card.onCopy} title="Copy ssh command" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⧉</Hov>
                               <Hov onClick={card.onEdit} title="Edit connection" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
                               <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;")}>{card.authIcon} {card.authLabel}</span>
                             </div>
@@ -1963,6 +2060,39 @@ export default class App extends React.Component<any, any> {
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.rejectHostKey} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Reject</Hov>
                 <Hov as="button" onClick={v.acceptHostKey} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Trust &amp; connect</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EDIT FOLDER */}
+        {v.folderEditOpen && (
+          <div onClick={v.cancelFolderEdit} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:79;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:400px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>Edit folder</div>
+              <div style={css("padding:10px 20px 16px;display:flex;flex-direction:column;gap:14px;")}>
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Name</div>
+                  <input value={v.folderEditName} onChange={v.onFolderEditName} autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 12px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                </div>
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Color</div>
+                  <div style={css("display:flex;gap:8px;flex-wrap:wrap;")}>
+                    {v.folderPalette.map((c, i) => (
+                      <span key={i} onClick={() => v.pickFolderColor(c)} style={{ width: '22px', height: '22px', borderRadius: '6px', background: c, cursor: 'pointer', border: '2px solid ' + (v.folderEditColor === c ? '#ededf0' : 'transparent'), boxShadow: '0 0 0 1px rgba(255,255,255,.08)' }}></span>
+                    ))}
+                  </div>
+                </div>
+                <div style={css("display:flex;align-items:center;gap:12px;")}>
+                  <div style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Favorite <span style={css("color:#54545e;")}>· show at top</span></div>
+                  <div onClick={v.toggleFolderEditFav} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.folderEditFav ? '#ff7a59' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
+                    <span style={{ position: 'absolute', top: '2px', left: v.folderEditFav ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
+                  </div>
+                </div>
+              </div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                <Hov as="button" onClick={v.cancelFolderEdit} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
+                <Hov as="button" onClick={v.saveFolderEdit} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Save</Hov>
               </div>
             </div>
           </div>
