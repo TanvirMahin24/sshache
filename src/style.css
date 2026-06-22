@@ -105,3 +105,39 @@ body {
     transform: none;
   }
 }
+/* Heartbeat for the author/support button (ties to the name "ache"). */
+.aca-heart {
+  transform-origin: center;
+  animation: acaBeat 1.8s ease-in-out infinite;
+  will-change: transform, filter;
+}
+.aca-heart:hover {
+  animation-duration: 0.8s;
+}
+@keyframes acaBeat {
+  0%,
+  55%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px rgba(255, 77, 112, 0.35));
+  }
+  10% {
+    transform: scale(1.28);
+    filter: drop-shadow(0 0 7px rgba(255, 77, 112, 0.85));
+  }
+  20% {
+    transform: scale(0.95);
+  }
+  30% {
+    transform: scale(1.16);
+    filter: drop-shadow(0 0 6px rgba(255, 77, 112, 0.7));
+  }
+  40% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aca-heart {
+    animation: none;
+  }
+}

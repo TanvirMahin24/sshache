@@ -1,0 +1,91 @@
+name: homebrew
+
+# When a GitHub Release is published, regenerate the Homebrew cask in the tap
+# repo (TanvirMahin24/homebrew-sshache) so `brew install --cask
+# TanvirMahin24/sshache/sshache` always points at the newest macOS build.
+#
+# Prerequisites (one-time):
+#   1. Create the tap repo: https://github.com/TanvirMahin24/homebrew-sshache
+#   2. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on
+#      that tap repo (classic `repo` scope, or a fine-grained token).
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  cask:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAP_REPO: TanvirMahin24/homebrew-sshache
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Resolve macOS asset + checksum
+        id: asset
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Pick the universal .dmg from the release assets.
+          url=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[] | select(.name | endswith(".dmg")) | .url' | head -n1)
+          if [ -z "$url" ]; then
+            echo "::error::No .dmg asset found on release $TAG"; exit 1
+          fi
+          echo "Downloading $url"
+          curl -sSL "$url" -o app.dmg
+          sha=$(sha256sum app.dmg | cut -d' ' -f1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "url=$url"         >> "$GITHUB_OUTPUT"
+          echo "sha=$sha"         >> "$GITHUB_OUTPUT"
+
+      - name: Render and push cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.asset.outputs.version }}
+          ASSET_URL: ${{ steps.asset.outputs.url }}
+          ASSET_SHA: ${{ steps.asset.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN secret is not set — see workflow header."; exit 1
+          fi
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Casks
+          cat > tap/Casks/sshache.rb <<EOF
+          cask "sshache" do
+            version "${VERSION}"
+            sha256 "${ASSET_SHA}"
+
+            url "${ASSET_URL}"
+            name "SSH Ache"
+            desc "Desktop SSH client with terminal, SFTP, and port forwarding"
+            homepage "https://sshache.com"
+
+            app "SSH Ache.app"
+
+            zap trash: [
+              "~/.ssh-ache",
+              "~/Library/Preferences/com.sshache.app.plist",
+              "~/Library/Saved Application State/com.sshache.app.savedState",
+            ]
+          end
+          EOF
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/sshache.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+          else
+            git commit -m "sshache ${VERSION}"
+            git push
+          fi

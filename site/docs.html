@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSH Ache — Documentation</title>
+  <meta name="description" content="Documentation for SSH Ache: install, connect to hosts, host-key verification, SFTP transfers, port forwarding, themes, encrypted backups, idle vault lock, and the approval-gated AI agent bridge." />
+  <meta name="theme-color" content="#0a0a0d" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===================== Nav ===================== -->
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="index.html" aria-label="SSH Ache home">
+        <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
+        <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
+      </a>
+
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+        <span></span>
+      </button>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#security">Security</a>
+        <a href="index.html#install">Install</a>
+        <a href="docs.html">Docs</a>
+        <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
+        <a class="nav-cta" href="index.html#install">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="docs-layout">
+
+      <!-- ===================== TOC ===================== -->
+      <aside class="docs-toc">
+        <h4>On this page</h4>
+        <nav id="toc">
+          <a href="#introduction">Introduction</a>
+          <a href="#install">Install</a>
+          <a href="#connect">Connecting &amp; saving a host</a>
+          <a href="#host-key">Host-key verification</a>
+          <a href="#sftp">SFTP transfers</a>
+          <a href="#port-forwarding">Port forwarding</a>
+          <a href="#themes">Themes &amp; settings</a>
+          <a href="#backup">Encrypted backup</a>
+          <a href="#vault-lock">Idle vault lock</a>
+          <a href="#mcp">AI agent access (MCP)</a>
+          <a href="#shortcuts">Keyboard shortcuts</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+      </aside>
+
+      <!-- ===================== Main ===================== -->
+      <main class="docs-main">
+        <div class="doc-hero">
+          <span class="eyebrow">Documentation</span>
+          <h1 class="gradient-text">SSH Ache docs</h1>
+          <p>Everything you need to connect, transfer, tunnel, and keep your secrets safe.</p>
+        </div>
+
+        <!-- Introduction -->
+        <section class="doc-section" id="introduction">
+          <h2><span class="num">01</span> Introduction</h2>
+          <p>
+            SSH Ache is a desktop SSH client with a clean terminal UI — connections,
+            SFTP, port forwarding, and an approval-gated AI agent bridge, with your
+            data kept on your machine and encrypted at rest.
+          </p>
+          <p>
+            Under the hood it is built with Tauri 2 (a Rust backend) and a React +
+            xterm.js frontend. SSH sessions run on russh / russh-sftp, local shells on
+            portable-pty, and your secrets are stored in the operating system keychain.
+            The result is a single, fast, native-feeling app for macOS, Windows, and Linux.
+          </p>
+          <div class="callout">
+            <span class="c-ic">💡</span>
+            <p>New here? Jump straight to <a href="#install">Install</a>, then <a href="#connect">Connecting &amp; saving a host</a> to open your first session.</p>
+          </div>
+        </section>
+
+        <!-- Install -->
+        <section class="doc-section" id="install">
+          <h2><span class="num">02</span> Install</h2>
+
+          <h3>Homebrew (macOS)</h3>
+          <p>The quickest way to install on macOS:</p>
+          <pre><code><span class="prompt">$ </span>brew install --cask TanvirMahin24/sshache/sshache</code></pre>
+
+          <h3>Direct download</h3>
+          <p>
+            Grab a platform build — <code>.dmg</code> (macOS), <code>.msi</code>
+            (Windows), or <code>.AppImage</code> / <code>.deb</code> (Linux) — from the
+            <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">GitHub Releases page</a>.
+          </p>
+
+          <h3>Build from source</h3>
+          <p>You'll need Rust and the Tauri prerequisites for your platform. Then, from the project root:</p>
+          <pre><code><span class="prompt">$ </span>npm install
+<span class="prompt">$ </span>npm run tauri build</code></pre>
+          <div class="callout">
+            <span class="c-ic">🛠️</span>
+            <p>Make sure the toolchain is in place first — see the <a href="https://tauri.app/start/prerequisites/" target="_blank" rel="noopener">Tauri prerequisites</a>.</p>
+          </div>
+        </section>
+
+        <!-- Connect -->
+        <section class="doc-section" id="connect">
+          <h2><span class="num">03</span> Connecting to a host &amp; saving it</h2>
+          <p>
+            Add a host with its address, port, and username, then connect to open a full
+            SSH session in a terminal tab. Authentication is handled with a password or
+            key, and the secret is stored in your OS keychain rather than in plaintext.
+          </p>
+          <p>Saved hosts live in the <strong>host vault</strong>, where you can:</p>
+          <ul>
+            <li>Organise hosts into <strong>folders</strong>, give them <strong>colours</strong>, and mark <strong>favourites</strong>.</li>
+            <li>Open multiple sessions in <strong>tabs</strong>, and split a tab into <strong>panes</strong> to watch more than one thing at once.</li>
+            <li>Open a <strong>local shell tab</strong> right next to your remote sessions.</li>
+            <li>Copy a ready-to-run <code>ssh</code> command for any saved host to use elsewhere.</li>
+          </ul>
+        </section>
+
+        <!-- Host-key verification -->
+        <section class="doc-section" id="host-key">
+          <h2><span class="num">04</span> Host-key verification (MITM protection)</h2>
+          <p>
+            The first time you connect to a host, SSH Ache shows its key fingerprint and
+            asks you to confirm it. Once accepted, the key is pinned in
+            <code>known_hosts</code> and used to verify every future connection.
+          </p>
+          <div class="callout warn">
+            <span class="c-ic">⚠️</span>
+            <p><strong>If a host key ever changes, SSH Ache refuses to connect and warns you.</strong> A changed key can mean the server was rebuilt — or that someone is attempting a man-in-the-middle attack. Verify the new fingerprint out-of-band before trusting it.</p>
+          </div>
+        </section>
+
+        <!-- SFTP -->
+        <section class="doc-section" id="sftp">
+          <h2><span class="num">05</span> SFTP transfers</h2>
+          <p>
+            The built-in SFTP browser gives you a <strong>dual-pane</strong> view — your
+            local filesystem on one side, the remote host on the other — so you can move
+            files without leaving the app.
+          </p>
+          <ul>
+            <li><strong>Drag and drop</strong> to transfer between local and remote.</li>
+            <li>Move <strong>multiple files</strong> and <strong>whole folders</strong> in one go.</li>
+            <li>When a name already exists at the destination, a <strong>replace / skip conflict prompt</strong> lets you decide per item.</li>
+          </ul>
+        </section>
+
+        <!-- Port forwarding -->
+        <section class="doc-section" id="port-forwarding">
+          <h2><span class="num">06</span> Port forwarding</h2>
+          <p>
+            Set up <strong>local forwards</strong> that are bridged over your SSH
+            connection. A port on your machine is tunnelled to a destination reachable
+            from the remote host — handy for reaching databases, dashboards, and internal
+            services through a connection you control.
+          </p>
+        </section>
+
+        <!-- Themes -->
+        <section class="doc-section" id="themes">
+          <h2><span class="num">07</span> Themes &amp; settings</h2>
+          <p>Tune the terminal to your taste:</p>
+          <ul>
+            <li>Pick from <strong>community terminal themes</strong>.</li>
+            <li>Adjust <strong>font size</strong>, <strong>cursor</strong> style, and <strong>scrollback</strong> live.</li>
+          </ul>
+          <p>Changes apply immediately, so you can dial things in without restarting a session.</p>
+        </section>
+
+        <!-- Backup -->
+        <section class="doc-section" id="backup">
+          <h2><span class="num">08</span> Encrypted backup (export / import)</h2>
+          <p>
+            Export your hosts and secrets to a single <strong>password-encrypted file</strong>.
+            The file is protected with PBKDF2 key derivation and AES-256-GCM encryption,
+            so it stays safe even if it leaves your machine.
+          </p>
+          <ul>
+            <li><strong>Export</strong> to create a portable, encrypted snapshot of your vault.</li>
+            <li><strong>Import</strong> on another machine — or after a reinstall — using the same password to restore everything.</li>
+          </ul>
+          <div class="callout warn">
+            <span class="c-ic">🔑</span>
+            <p>The backup password is the only way to open the file. If you lose it, the backup can't be recovered — store it somewhere safe.</p>
+          </div>
+        </section>
+
+        <!-- Vault lock -->
+        <section class="doc-section" id="vault-lock">
+          <h2><span class="num">09</span> Idle vault lock</h2>
+          <p>
+            Turn on the optional <strong>idle vault lock</strong> to have SSH Ache require
+            a passphrase after a period of inactivity. If you step away, an unattended
+            window won't leave your saved hosts and secrets open.
+          </p>
+        </section>
+
+        <!-- MCP -->
+        <section class="doc-section" id="mcp">
+          <h2><span class="num">10</span> AI agent access / MCP</h2>
+          <p>
+            SSH Ache can expose an optional <strong>MCP server</strong> so an AI agent can
+            help you work across your hosts. It is designed to stay firmly under your
+            control:
+          </p>
+          <ul>
+            <li><strong>Off by default</strong> — nothing is exposed until you turn it on.</li>
+            <li>Bound to <strong>localhost</strong> and protected by a <strong>bearer token</strong>.</li>
+            <li><strong>Per-host opt-in</strong> — only the hosts you allow are reachable.</li>
+            <li><strong>Per-command approval</strong> — each command the agent wants to run is approved by you in the app first.</li>
+            <li>Your <strong>secrets never reach the agent</strong>.</li>
+          </ul>
+          <div class="callout">
+            <span class="c-ic">🤖</span>
+            <p>Think of it as a gate, not a hand-off: the agent can ask, but every host and every command waits on your approval.</p>
+          </div>
+        </section>
+
+        <!-- Shortcuts -->
+        <section class="doc-section" id="shortcuts">
+          <h2><span class="num">11</span> Keyboard shortcuts</h2>
+          <p>Move faster with these shortcuts. On Windows and Linux, use <kbd>Ctrl</kbd> where <kbd>⌘</kbd> is shown.</p>
+          <table class="kbd-table">
+            <thead>
+              <tr><th>Shortcut</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><kbd>⌘</kbd> <kbd>K</kbd></td><td>Open the command palette</td></tr>
+              <tr><td><kbd>⌘</kbd> <kbd>T</kbd></td><td>Browse &amp; switch themes</td></tr>
+              <tr><td><kbd>⌘</kbd> <kbd>D</kbd></td><td>Split the current pane</td></tr>
+            </tbody>
+          </table>
+          <div class="callout">
+            <span class="c-ic">⌨️</span>
+            <p>The command palette (<kbd>⌘</kbd> <kbd>K</kbd>) is the fastest way to jump to a host, open a tab, or change a setting.</p>
+          </div>
+        </section>
+
+        <!-- FAQ -->
+        <section class="doc-section faq" id="faq">
+          <h2><span class="num">12</span> FAQ</h2>
+
+          <details>
+            <summary>Which platforms does SSH Ache run on?</summary>
+            <p>macOS, Windows, and Linux. It's built with Tauri 2, so each platform gets a native build — <code>.dmg</code>, <code>.msi</code>, and <code>.AppImage</code> / <code>.deb</code> respectively.</p>
+          </details>
+
+          <details>
+            <summary>Where are my passwords and keys stored?</summary>
+            <p>In your operating system's keychain, not in a plaintext config file. SSH Ache hands secrets to the platform's secure store and retrieves them when a connection needs them.</p>
+          </details>
+
+          <details>
+            <summary>Does my data leave my machine?</summary>
+            <p>Your data stays on your machine, encrypted at rest. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals.</p>
+          </details>
+
+          <details>
+            <summary>Is the AI agent bridge safe to enable?</summary>
+            <p>It's off by default. When enabled, it binds to localhost behind a bearer token, is opt-in per host, requires per-command approval in the app, and never receives your secrets. You stay in control of every action.</p>
+          </details>
+
+          <details>
+            <summary>What happens if a server's host key changes?</summary>
+            <p>SSH Ache refuses to connect and warns you. Confirm the new fingerprint through a trusted channel before accepting it — a changed key can indicate a man-in-the-middle attempt.</p>
+          </details>
+
+          <details>
+            <summary>How do I move my setup to a new computer?</summary>
+            <p>Use the encrypted backup. Export your hosts and secrets to a password-encrypted file on the old machine, then import it with the same password on the new one.</p>
+          </details>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ===================== Footer ===================== -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-about">
+          <a class="brand" href="index.html" aria-label="SSH Ache home">
+            <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
+            <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
+          </a>
+          <p>A desktop SSH client with a clean terminal UI. Built by Noor Ajmir Tanvir.</p>
+          <a class="coffee" href="https://www.patreon.com/cw/tanvirmahin24" target="_blank" rel="noopener">Buy me a coffee ☕</a>
+        </div>
+
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Product</h4>
+            <a href="index.html#features">Features</a>
+            <a href="index.html#security">Security</a>
+            <a href="index.html#install">Install</a>
+            <a href="docs.html">Documentation</a>
+          </div>
+          <div class="footer-col">
+            <h4>Project</h4>
+            <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">Releases</a>
+          </div>
+          <div class="footer-col">
+            <h4>Author</h4>
+            <a href="https://tanvirmahin.com" target="_blank" rel="noopener">tanvirmahin.com</a>
+            <a href="https://github.com/TanvirMahin24" target="_blank" rel="noopener">GitHub profile</a>
+            <a href="mailto:tanvirmahin24@gmail.com">tanvirmahin24@gmail.com</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> Noor Ajmir Tanvir · SSH Ache</span>
+        <a href="https://tanvirmahin.com" target="_blank" rel="noopener">tanvirmahin.com</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Mobile nav toggle
+    (function () {
+      var t = document.getElementById('navToggle');
+      var l = document.getElementById('navLinks');
+      if (t && l) {
+        t.addEventListener('click', function () {
+          var open = l.classList.toggle('open');
+          t.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        l.addEventListener('click', function (e) {
+          if (e.target.tagName === 'A') {
+            l.classList.remove('open');
+            t.setAttribute('aria-expanded', 'false');
+          }
+        });
+      }
+    })();
+
+    // Active TOC highlighting
+    (function () {
+      var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+      var sections = links
+        .map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); })
+        .filter(Boolean);
+      if (!('IntersectionObserver' in window) || !sections.length) return;
+
+      var byId = {};
+      links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) {
+            links.forEach(function (a) { a.classList.remove('active'); });
+            var active = byId[e.target.id];
+            if (active) active.classList.add('active');
+          }
+        });
+      }, { rootMargin: '-30% 0px -65% 0px', threshold: 0 });
+
+      sections.forEach(function (s) { obs.observe(s); });
+    })();
+
+    // Footer year
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

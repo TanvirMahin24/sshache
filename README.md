@@ -1,70 +1,82 @@
-# sshache
+<p align="center"><img src="src/assets/logo-wordmark.svg" width="420" alt="SSH Ache"></p>
 
-A local-only SSH client with a clean UI. No accounts, no cloud, no telemetry —
-your connection data never leaves the machine. Open source.
+<p align="center">A desktop SSH client with a clean terminal UI — connections, SFTP, port forwarding, and an approval-gated AI agent bridge, with your data kept on your machine and encrypted at rest.</p>
 
-Built with [Tauri](https://tauri.app) (Rust) + [xterm.js](https://xtermjs.org).
+<p align="center">
+  <a href="https://github.com/TanvirMahin24/sshache/releases"><img src="https://img.shields.io/github/v/release/TanvirMahin24/sshache?color=ff5f6d&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-ff7a59" alt="Platforms: macOS, Windows, Linux">
+  <img src="https://img.shields.io/badge/built%20with-Tauri%202-ff8a63" alt="Built with Tauri 2">
+  <a href="https://github.com/TanvirMahin24/sshache/releases"><img src="https://img.shields.io/github/downloads/TanvirMahin24/sshache/total?color=46d9a0&label=downloads" alt="Total downloads"></a>
+</p>
 
-## Status
+<p align="center">
+  <a href="https://sshache.com">Website</a> ·
+  <a href="https://sshache.com/docs">Docs</a> ·
+  <a href="https://github.com/TanvirMahin24/sshache/releases">Releases</a> ·
+  <a href="https://github.com/TanvirMahin24/sshache/issues/new">Report a bug</a>
+</p>
 
-UI rebuilt to the **SSH Ache** design (Claude Design handoff) as a React app —
-dashboard, command palette, themes, multi-tab / split terminal, SFTP panel,
-settings. **Connecting opens a real SSH shell** (password / key / agent auth,
-PTY, first-seen `known_hosts` confirmation) in a live xterm.js pane. SFTP
-(list + drag-transfer), theme→terminal colours, live terminal settings,
-OS-keychain secrets, and a frameless window with working titlebar controls are
-all wired. "New tab" opens a real local shell (PTY); SFTP browses directories;
-pasted private keys connect; config exports as a password-encrypted file — run
-it with `npm run tauri dev`. Remaining: per-theme ANSI palettes and port
-forwarding — see [docs/TASKS.md](docs/TASKS.md).
+> "Don't be so busy making a living that you forget to actually make a life."
 
-## Stack
+<!-- Add a product screenshot at docs/screenshot.png, then uncomment:
+<p align="center"><img src="docs/screenshot.png" width="820" alt="SSH Ache screenshot"></p>
+-->
 
-- **Shell**: Tauri 2 (Rust backend, web frontend, ~10 MB binary)
-- **Terminal**: xterm.js + fit/web-links addons
-- **SSH**: [`russh`](https://crates.io/crates/russh) (pure-Rust SSH)
-- **Storage**: host profiles in `~/.ssh-ache/state.json` (non-secret fields
-  only; `localStorage` in the browser preview). Passwords / passphrases are
-  saved in the OS keychain via [`keyring`](https://crates.io/crates/keyring), or
-  typed per connection — never written to the config file.
+## Features
 
-## Develop
+- 💻 **Real terminal** — full SSH sessions (russh + xterm.js), tabbed, with splittable panes, plus local shell tabs.
+- 🗂️ **Host vault** — saved hosts organised in folders with colours and favourites; secrets stored in the OS keychain; copy a ready-to-run `ssh` command for any host.
+- 🔐 **Host-key verification** — first-connect fingerprint confirmation, `known_hosts` tracking, and a hard refusal with a warning if a host key ever changes (MITM protection).
+- 📁 **SFTP browser** — dual-pane local/remote navigation with drag-and-drop transfer of multiple files and whole folders, and a replace/skip conflict prompt.
+- 🔀 **Port forwarding** — local forwards bridged over the SSH connection.
+- 🎨 **Themes & settings** — community terminal themes with live font size, cursor, and scrollback controls.
+- 💾 **Encrypted backup** — export and import your hosts and secrets as a password-encrypted file (PBKDF2 → AES-256-GCM).
+- ⏳ **Idle vault lock** — optional passphrase lock after a period of inactivity.
+- 🤖 **AI agent access (MCP)** — an optional, off-by-default MCP server bound to localhost behind a bearer token, with per-host opt-in and per-command in-app approval; secrets never reach the agent. See [docs/MCP.md](./docs/MCP.md).
+- 🖥️ **Cross-platform** — built with Tauri 2 (Rust) for macOS, Windows, and Linux.
 
-Requires Node 18+ and Rust (stable).
+## Install
 
-```bash
-npm install
-npm run tauri dev      # hot-reload dev build
-npm run tauri build    # production bundle
+### Homebrew (macOS)
+
+```sh
+brew install --cask TanvirMahin24/sshache/sshache
 ```
+
+### Direct download
+
+Grab the latest platform build — `.dmg` (macOS), `.msi` (Windows), or `.AppImage` / `.deb` (Linux) — from the [Releases](https://github.com/TanvirMahin24/sshache/releases) page.
+
+### Build from source
+
+```sh
+npm install
+npm run tauri build
+```
+
+Building from source requires Rust and the Tauri toolchain. See the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for platform-specific setup.
 
 ## Security
 
-Host keys are verified against `~/.ssh/known_hosts`:
+- **Host-key verification** — fingerprints are confirmed on first connect and tracked in `known_hosts`; if a host key ever changes, the connection is refused with a warning to guard against man-in-the-middle attacks.
+- **OS-keychain secret storage** — passwords and keys live in the operating system keychain, not in plaintext config.
+- **Encrypted backups** — exported hosts and secrets are sealed with PBKDF2 key derivation and AES-256-GCM encryption.
+- **Approval-gated AI access** — the MCP server is off by default, bound to `127.0.0.1` behind a random bearer token, default-deny per host, and requires explicit in-app approval for every command; secrets are never exposed to the agent. Details in [docs/MCP.md](./docs/MCP.md).
 
-- **Unknown host** → you're shown the key's SHA256 fingerprint and must confirm
-  before it is trusted (written to `known_hosts`) and the connection proceeds.
-- **Known host, key matches** → connection proceeds.
-- **Known host, key changed** → connection is **refused** (possible MITM); the
-  terminal shows a warning. Remove the stale `known_hosts` line if the change is
-  legitimate.
+Your data stays on your machine, encrypted at rest.
 
-Saved passwords / passphrases live in the OS keychain (via `keyring`), never in
-the plaintext config file — or type them per connection.
+## Tech stack
 
-## Roadmap
+Tauri 2 (Rust backend) · React + xterm.js (frontend) · russh / russh-sftp · portable-pty · OS keychain (keyring).
 
-- [x] Public-key auth (`~/.ssh` keys, encrypted or not)
-- [x] SSH-agent auth (`SSH_AUTH_SOCK`)
-- [x] Host-key verification (`known_hosts`, TOFU / accept-new)
-- [x] Interactive confirm on first-seen host key
-- [x] OS keychain for saved secrets
-- [x] Multiple tabs / split panes
-- [x] SFTP file browser (list + drag-to-transfer; navigation pending)
-- [x] Themes (terminal colours) & settings (font, cursor, scrollback)
-- [x] Encrypted config backup (password-based import / export)
-- [x] Local port forwarding (-L)
+## Support
 
-## License
+If SSH Ache saves you time, you can [buy me a coffee ☕](https://www.patreon.com/cw/tanvirmahin24).
 
-MIT
+## Author
+
+**Noor Ajmir Tanvir**
+
+- Website — [tanvirmahin.com](https://tanvirmahin.com)
+- GitHub — [@TanvirMahin24](https://github.com/TanvirMahin24)
+- Email — [tanvirmahin24@gmail.com](mailto:tanvirmahin24@gmail.com)
