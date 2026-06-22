@@ -1,52 +1,59 @@
-# Deploying the website (Cloudflare Pages)
+# Deploying the website (Cloudflare)
 
-The marketing + docs site lives in [`site/`](../site) and deploys to
-**Cloudflare Pages** at https://sshache.com. Config is in
-[`wrangler.toml`](../wrangler.toml) (`pages_build_output_dir = "site"`).
+The marketing + docs site lives in [`site/`](../site) and is deployed to
+**Cloudflare** as a Workers Static-Assets project at https://sshache.com.
+It is **prebuilt static HTML/CSS — there is no build step.**
 
-Pick one of the two paths below.
+Config: [`wrangler.toml`](../wrangler.toml) →
 
-## Option A — Dashboard (Git integration, recommended)
+```toml
+name = "sshache"
+compatibility_date = "2025-01-01"
 
-1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Pages** →
-   **Connect to Git** → pick `TanvirMahin24/sshache`.
-2. Build settings:
-   - Framework preset: **None**
-   - Build command: *(leave empty — the site is static)*
-   - Build output directory: **`site`**
-3. Save and deploy. Every push to `main` auto-builds.
-4. Project → **Custom domains** → **Set up a domain** → `sshache.com`
-   (already in your account, so it's one click). Add `www` too if you want it.
+[assets]
+directory = "./site"
+```
 
-## Option B — Wrangler / GitHub Actions
+`npx wrangler deploy` uploads `site/` as the project's static assets.
 
-CI is wired in [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) —
-it deploys on every push to `main` that touches `site/`. It needs two repo
-secrets:
+## Cloudflare project — Build settings
 
-- `CLOUDFLARE_API_TOKEN` — a token with the **Cloudflare Pages: Edit** permission
-- `CLOUDFLARE_ACCOUNT_ID` — your account id (Workers & Pages → right sidebar)
+In the dashboard → your `sshache` project → **Settings → Build**, set:
 
-First-time project creation (once, locally):
+| Setting | Value |
+| --- | --- |
+| Root directory | `/`  *(not `/site`)* |
+| Build command | *(empty)* |
+| Deploy command | `npx wrangler deploy` |
+
+Then **Retry deployment** (or push to `main`). The connected-repo build runs
+`wrangler deploy`, which reads `wrangler.toml` and ships `site/`.
+
+> Why these values: `npm run build` builds the **desktop app**, not the site,
+> and `/site` as root hides `wrangler.toml`. Root `/` + empty build + the
+> `[assets]` block is the whole story.
+
+## Custom domain
+
+Project → **Settings → Domains & Routes → Add → Custom domain → `sshache.com`**.
+Cloudflare provisions the cert automatically (the zone is already in your account).
+
+## Local deploy (optional)
 
 ```sh
 npx wrangler login
-npx wrangler pages project create sshache --production-branch main
-npx wrangler pages deploy        # reads wrangler.toml
+npx wrangler deploy        # uploads ./site
 ```
 
-After that, pushes to `main` deploy automatically via the workflow, or run
-`npx wrangler pages deploy` anytime.
-
-## What's already set up for SEO / serving
+## Already set up for SEO / serving
 
 - `site/_headers` — security headers + 1-year cache on `/assets/*`.
 - `site/robots.txt` + `site/sitemap.xml` — pointed at `https://sshache.com`.
 - Per-page `<title>`, meta description, canonical, Open Graph + Twitter cards,
-  and JSON-LD (`SoftwareApplication` on the landing page, `TechArticle` on docs).
-- `site/assets/og-image.png` (1200×630) is the social share image.
+  JSON-LD (`SoftwareApplication` on the landing page, `TechArticle` on docs).
+- `site/assets/og-image.png` (1200×630) social share image.
 
 ## After the domain is live
 
 - Submit `https://sshache.com/sitemap.xml` in Google Search Console.
-- Verify the share preview with the Facebook Sharing Debugger / X Card Validator.
+- Check the share preview with the Facebook Sharing Debugger / X Card Validator.
