@@ -15,7 +15,8 @@ use russh_sftp::client::SftpSession;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 enum KeyIssue {
@@ -97,6 +98,17 @@ struct PtyState(Mutex<HashMap<String, PtySlot>>);
 // dedicated SSH connection and closes the local listener.
 #[derive(Default)]
 struct ForwardState(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>);
+
+// Embedded MCP server state (off by default). Bound to 127.0.0.1, bearer-token
+// auth, per-host opt-in, and every command requires interactive user approval.
+#[derive(Default)]
+struct McpState {
+    running: AtomicBool,
+    token: Mutex<String>,
+    counter: AtomicU64,
+    pending: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<bool>>>,
+    log: Mutex<Vec<serde_json::Value>>,
+}
 
 fn sftp_of(state: &SftpState, id: &str) -> Result<Arc<SftpSession>, String> {
     state
@@ -595,6 +607,113 @@ async fn sftp_get(
     Ok(())
 }
 
+// Recursive upload: walk the local tree, mkdir remote dirs, put each file.
+// Progress is by file count. ponytail: iterative walk (no async recursion).
+#[tauri::command]
+async fn sftp_put_dir(
+    state: State<'_, SftpState>,
+    id: String,
+    local_path: String,
+    remote_path: String,
+    on_progress: Channel<u32>,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let sftp = sftp_of(&state, &id)?;
+    let mut stack = vec![(local_path, remote_path)];
+    let mut mkdirs: Vec<String> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    while let Some((ld, rd)) = stack.pop() {
+        mkdirs.push(rd.clone());
+        for e in std::fs::read_dir(&ld).map_err(|e| format!("read {ld}: {e}"))? {
+            let e = e.map_err(|e| e.to_string())?;
+            let name = e.file_name().to_string_lossy().to_string();
+            let lp = format!("{ld}/{name}");
+            let rp = format!("{rd}/{name}");
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push((lp, rp)),
+                _ => files.push((lp, rp)),
+            }
+        }
+    }
+    for d in &mkdirs {
+        let _ = sftp.create_dir(d).await; // ignore "already exists"
+    }
+    let total = files.len().max(1);
+    let mut last = 0u32;
+    for (i, (lp, rp)) in files.iter().enumerate() {
+        let data = tokio::fs::read(lp).await.map_err(|e| format!("read {lp}: {e}"))?;
+        let mut f = sftp.create(rp).await.map_err(|e| format!("create {rp}: {e}"))?;
+        f.write_all(&data).await.map_err(|e| e.to_string())?;
+        f.flush().await.ok();
+        f.shutdown().await.ok();
+        let pct = ((i + 1) * 100 / total) as u32;
+        if pct != last {
+            last = pct;
+            let _ = on_progress.send(pct);
+        }
+    }
+    let _ = on_progress.send(100);
+    Ok(())
+}
+
+// Recursive download: walk the remote tree, mkdir local dirs, get each file.
+#[tauri::command]
+async fn sftp_get_dir(
+    state: State<'_, SftpState>,
+    id: String,
+    remote_path: String,
+    local_path: String,
+    on_progress: Channel<u32>,
+) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let sftp = sftp_of(&state, &id)?;
+    let mut stack = vec![(remote_path, local_path)];
+    let mut mkdirs: Vec<String> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    while let Some((rd, ld)) = stack.pop() {
+        mkdirs.push(ld.clone());
+        let entries = sftp.read_dir(&rd).await.map_err(|e| format!("list {rd}: {e}"))?;
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let rp = format!("{rd}/{name}");
+            let lp = format!("{ld}/{name}");
+            if entry.metadata().is_dir() {
+                stack.push((rp, lp));
+            } else {
+                files.push((rp, lp));
+            }
+        }
+    }
+    for d in &mkdirs {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let total = files.len().max(1);
+    let mut last = 0u32;
+    for (i, (rp, lp)) in files.iter().enumerate() {
+        let mut rf = sftp.open(rp).await.map_err(|e| format!("open {rp}: {e}"))?;
+        let mut out = tokio::fs::File::create(lp).await.map_err(|e| format!("create {lp}: {e}"))?;
+        let mut buf = vec![0u8; 32768];
+        loop {
+            let n = rf.read(&mut buf).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
+        }
+        out.flush().await.ok();
+        let pct = ((i + 1) * 100 / total) as u32;
+        if pct != last {
+            last = pct;
+            let _ = on_progress.send(pct);
+        }
+    }
+    let _ = on_progress.send(100);
+    Ok(())
+}
+
 #[tauri::command]
 fn sftp_disconnect(state: State<'_, SftpState>, id: String) {
     state.0.lock().unwrap().remove(&id);
@@ -791,6 +910,214 @@ fn forward_stop(state: State<'_, ForwardState>, id: String) {
     }
 }
 
+// ---- MCP server (local, opt-in, approval-gated) ----
+
+// Hosts the user has explicitly exposed to the agent (agentAllowed), read from
+// the same config file the UI writes.
+fn mcp_exposed_hosts() -> Result<Vec<serde_json::Value>, String> {
+    let path = config_path("state")?;
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    if raw.is_empty() {
+        return Ok(vec![]);
+    }
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let arr = v.get("hosts").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    Ok(arr
+        .into_iter()
+        .filter(|h| h.get("agentAllowed").and_then(|x| x.as_bool()).unwrap_or(false))
+        .collect())
+}
+
+fn mcp_tools() -> serde_json::Value {
+    serde_json::json!([
+        { "name": "list_hosts", "description": "List the SSH hosts the user has exposed to the agent (no secrets).", "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "run_command", "description": "Run a shell command on an exposed host over SSH. Each call must be approved by the user in the SSH Ache app.", "inputSchema": { "type": "object", "properties": { "host_id": { "type": "string" }, "command": { "type": "string" } }, "required": ["host_id", "command"] } }
+    ])
+}
+
+// Emit an approval request to the GUI and block until the user responds (or 2 min timeout).
+fn mcp_request_approval(app: &tauri::AppHandle, host: &str, command: &str) -> bool {
+    let st = app.state::<McpState>();
+    let id = st.counter.fetch_add(1, Ordering::SeqCst) + 1;
+    let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+    st.pending.lock().unwrap().insert(id, tx);
+    let _ = app.emit("mcp-approval", serde_json::json!({ "id": id, "host": host, "command": command }));
+    let res = tauri::async_runtime::block_on(async {
+        match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+            Ok(Ok(v)) => v,
+            _ => false,
+        }
+    });
+    st.pending.lock().unwrap().remove(&id);
+    res
+}
+
+async fn mcp_ssh_exec(host: &serde_json::Value, blob: &str, command: &str) -> Result<String, String> {
+    let addr = host["addr"].as_str().unwrap_or("").to_string();
+    let port: u16 = host["port"].as_str().and_then(|s| s.parse().ok()).unwrap_or(22);
+    let user = host["user"].as_str().unwrap_or("root").to_string();
+    let auth = host["auth"].as_str().unwrap_or("password").to_string();
+    let key_path = host["keyPath"].as_str().unwrap_or("").to_string();
+    let sb: serde_json::Value = serde_json::from_str(blob).unwrap_or(serde_json::json!({}));
+    let (secret, key_text) = if auth == "key" {
+        (sb["passphrase"].as_str().unwrap_or("").to_string(), sb["keyText"].as_str().unwrap_or("").to_string())
+    } else {
+        (sb["password"].as_str().unwrap_or("").to_string(), String::new())
+    };
+    let config = Arc::new(client::Config::default());
+    let handler = Handler { host: addr.clone(), port, issue: Arc::new(Mutex::new(None)) };
+    let mut session = client::connect(config, (addr, port), handler)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+    do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
+    let mut channel = session.channel_open_session().await.map_err(|e| format!("channel: {e}"))?;
+    channel.exec(true, command.as_bytes().to_vec()).await.map_err(|e| format!("exec: {e}"))?;
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Data { ref data }) => out.extend_from_slice(data),
+            Some(ChannelMsg::ExtendedData { ref data, .. }) => out.extend_from_slice(data),
+            Some(ChannelMsg::Eof) | None => break,
+            _ => {}
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).to_string())
+}
+
+fn mcp_tool_call(app: &tauri::AppHandle, name: &str, args: &serde_json::Value) -> Result<String, String> {
+    let hosts = mcp_exposed_hosts()?;
+    match name {
+        "list_hosts" => {
+            let list: Vec<_> = hosts.iter().map(|h| serde_json::json!({
+                "id": h["id"],
+                "name": h["name"],
+                "target": format!("{}@{}:{}", h["user"].as_str().unwrap_or("root"), h["addr"].as_str().unwrap_or(""), h["port"].as_str().unwrap_or("22")),
+                "auth": h["auth"],
+                "tags": h["tags"],
+            })).collect();
+            Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
+        }
+        "run_command" => {
+            let host_id = args["host_id"].as_str().ok_or("host_id required")?;
+            let command = args["command"].as_str().ok_or("command required")?;
+            let host = hosts
+                .iter()
+                .find(|h| h["id"].as_str() == Some(host_id))
+                .ok_or("host not found or not exposed to the agent")?;
+            let host_name = host["name"].as_str().unwrap_or("").to_string();
+            let allowed = mcp_request_approval(app, &host_name, command);
+            app.state::<McpState>().log.lock().unwrap().push(serde_json::json!({
+                "host": host_name, "command": command, "allowed": allowed,
+            }));
+            if !allowed {
+                return Err("denied by user".into());
+            }
+            let blob = secret_entry(host_id)?.get_password().unwrap_or_default();
+            tauri::async_runtime::block_on(mcp_ssh_exec(host, &blob, command))
+        }
+        _ => Err("unknown tool".into()),
+    }
+}
+
+fn mcp_dispatch(app: &tauri::AppHandle, body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let id = v.get("id").cloned();
+    let method = v.get("method").and_then(|x| x.as_str()).unwrap_or("");
+    let result = match method {
+        "initialize" => serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "sshache", "version": "0.4.0" }
+        }),
+        "ping" => serde_json::json!({}),
+        "tools/list" => serde_json::json!({ "tools": mcp_tools() }),
+        "tools/call" => {
+            let params = v.get("params").cloned().unwrap_or(serde_json::json!({}));
+            let name = params.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            match mcp_tool_call(app, name, &args) {
+                Ok(text) => serde_json::json!({ "content": [{ "type": "text", "text": text }] }),
+                Err(e) => serde_json::json!({ "content": [{ "type": "text", "text": format!("error: {e}") }], "isError": true }),
+            }
+        }
+        _ => {
+            if id.is_none() {
+                return None;
+            }
+            return Some(serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not found" } }).to_string());
+        }
+    };
+    if id.is_none() {
+        return None; // notification — no response
+    }
+    Some(serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string())
+}
+
+fn mcp_handle(app: &tauri::AppHandle, mut req: tiny_http::Request) {
+    let token = app.state::<McpState>().token.lock().unwrap().clone();
+    let expected = format!("Bearer {token}");
+    let authed = !token.is_empty()
+        && req.headers().iter().any(|h| h.field.equiv("Authorization") && h.value.as_str() == expected);
+    if !authed {
+        let _ = req.respond(tiny_http::Response::from_string("{\"error\":\"unauthorized\"}").with_status_code(401));
+        return;
+    }
+    let mut body = String::new();
+    let _ = req.as_reader().read_to_string(&mut body);
+    match mcp_dispatch(app, &body) {
+        Some(json) => {
+            let r = tiny_http::Response::from_string(json)
+                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+            let _ = req.respond(r);
+        }
+        None => {
+            let _ = req.respond(tiny_http::Response::from_string("").with_status_code(202));
+        }
+    }
+}
+
+#[tauri::command]
+fn mcp_start(app: tauri::AppHandle, state: State<'_, McpState>, token: String, port: u16) -> Result<u16, String> {
+    if state.running.load(Ordering::SeqCst) {
+        return Ok(port);
+    }
+    let server = tiny_http::Server::http(("127.0.0.1", port)).map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;
+    *state.token.lock().unwrap() = token;
+    state.running.store(true, Ordering::SeqCst);
+    let app2 = app.clone();
+    std::thread::spawn(move || loop {
+        if !app2.state::<McpState>().running.load(Ordering::SeqCst) {
+            break;
+        }
+        match server.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok(Some(req)) => mcp_handle(&app2, req),
+            Ok(None) => continue,
+            Err(_) => break,
+        }
+    });
+    Ok(port)
+}
+
+#[tauri::command]
+fn mcp_stop(state: State<'_, McpState>) {
+    state.running.store(false, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn mcp_status(state: State<'_, McpState>) -> serde_json::Value {
+    serde_json::json!({
+        "running": state.running.load(Ordering::SeqCst),
+        "log": *state.log.lock().unwrap(),
+    })
+}
+
+#[tauri::command]
+fn mcp_approval_respond(state: State<'_, McpState>, id: u64, allow: bool) {
+    if let Some(tx) = state.pending.lock().unwrap().remove(&id) {
+        let _ = tx.send(allow);
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -798,6 +1125,7 @@ fn main() {
         .manage(SftpState::default())
         .manage(PtyState::default())
         .manage(ForwardState::default())
+        .manage(McpState::default())
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
             ssh_write,
@@ -813,6 +1141,8 @@ fn main() {
             sftp_list,
             sftp_put,
             sftp_get,
+            sftp_put_dir,
+            sftp_get_dir,
             sftp_disconnect,
             local_list,
             local_home,
@@ -823,7 +1153,11 @@ fn main() {
             pty_resize,
             pty_close,
             forward_start,
-            forward_stop
+            forward_stop,
+            mcp_start,
+            mcp_stop,
+            mcp_status,
+            mcp_approval_respond
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

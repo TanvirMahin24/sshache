@@ -94,6 +94,11 @@ const decryptJson = async (envelope: string, password: string) => {
   return JSON.parse(new TextDecoder().decode(pt));
 };
 
+// MCP server (local agent access). Fixed loopback port + a random bearer token.
+const MCP_PORT = 8765;
+const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
+const genToken = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, "0")).join("");
+
 // Vault-lock passphrase: store a PBKDF2 hash (salt + derived bits), verify on unlock.
 const hashPass = async (password: string, saltB64?: string) => {
   const salt = saltB64 ? ub64(saltB64) : crypto.getRandomValues(new Uint8Array(16));
@@ -179,7 +184,7 @@ const cursorStyleOf = (c: string) => (c === "bar" ? "bar" : c === "underline" ? 
 // A live SSH pane: a real xterm.js terminal wired to the russh backend over a
 // per-pane sessionId. Created once on mount; disconnected + disposed on unmount.
 // In a plain browser (no Tauri runtime) it shows a hint instead of connecting.
-function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onHostKey, register }: any) {
+function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register }: any) {
   const wrapRef = React.useRef<any>(null);
   const inst = React.useRef<any>(null);
 
@@ -214,7 +219,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       const onDataL = new Channel<number[]>();
       onDataL.onmessage = (m) => term.write(new Uint8Array(m));
       const onCloseL = new Channel<string>();
-      onCloseL.onmessage = () => term.writeln("\r\n\x1b[90m— shell exited —\x1b[0m");
+      onCloseL.onmessage = () => { term.writeln("\r\n\x1b[90m— shell exited —\x1b[0m"); if (onClosed) onClosed(); };
       invoke("pty_spawn", { id: session.sessionId, cols: term.cols, rows: term.rows, onData: onDataL, onClose: onCloseL })
         .then(() => { if (!disposed && onConnected) onConnected(); })
         .catch((e) => { term.writeln(`\r\n\x1b[31mlocal shell failed: ${String(e)}\x1b[0m`); if (onError) onError(String(e)); });
@@ -235,7 +240,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
     const onData = new Channel<number[]>();
     onData.onmessage = (m) => term.write(new Uint8Array(m));
     const onClose = new Channel<string>();
-    onClose.onmessage = () => term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m");
+    onClose.onmessage = () => { term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m"); if (onClosed) onClosed(); };
 
     invoke("ssh_connect", {
       sessionId: session.sessionId,
@@ -363,6 +368,10 @@ export default class App extends React.Component<any, any> {
     forwards: [],
     folderMeta: {},
     folderEdit: null,
+    mcpRunning: false,
+    mcpLog: [],
+    mcpOpen: false,
+    approvalReq: null,
     transfer: null,
     dragOver: null,
     toasts: [],
@@ -373,6 +382,12 @@ export default class App extends React.Component<any, any> {
     sftpId: null,
     sftpStatus: 'idle', // idle | connecting | ready | error
     sftpErr: '',
+    conflict: null,
+    conflictAll: false,
+    conflictPolicy: null, // null | 'replace' | 'skip' (set by "Apply to all")
+    queue: [],
+    selLocal: [],
+    selRemote: [],
     tabs: [
       { id:'t1', title:'production-web', host:'production-web', user:'root', addr:'10.0.4.21', layout:'row', sizes:[100], panes:[
         { id:'p1', user:'root', host:'production-web', cwd:'~', input:'', lines:[
@@ -447,6 +462,11 @@ export default class App extends React.Component<any, any> {
         this.setState({ locked: true });
       }
     }, 20000);
+    // MCP: poll status + listen for per-command approval requests from the server.
+    if (isTauri) {
+      this.refreshMcp();
+      import('@tauri-apps/api/event').then(({ listen }) => { listen('mcp-approval', (e) => this.setState({ approvalReq: e.payload })); }).catch(() => {});
+    }
   }
   componentWillUnmount() {
     window.removeEventListener('keydown', this._key);
@@ -506,6 +526,34 @@ export default class App extends React.Component<any, any> {
     this.setState({ forwards: [] });
     this.pushToast({ type: 'info', title: 'Port forwards stopped', msg: n ? `${n} closed` : 'none active' });
   };
+
+  // ---- MCP server (local agent access) ----
+  ensureMcpToken() {
+    let t = this.state.settings.mcpToken;
+    if (!t) { t = genToken(); this.setSetting('mcpToken', t); }
+    return t;
+  }
+  refreshMcp() {
+    if (!isTauri) return;
+    invoke('mcp_status').then((s) => this.setState({ mcpRunning: !!s.running, mcpLog: Array.isArray(s.log) ? s.log : [] })).catch(() => {});
+  }
+  openMcp() { this.setState({ mcpOpen: true, settingsOpen: false }); this.refreshMcp(); }
+  toggleMcp = () => {
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'MCP', msg: 'Available in the desktop app.' }); return; }
+    if (this.state.mcpRunning) { invoke('mcp_stop').then(() => this.setState({ mcpRunning: false })).catch(() => {}); return; }
+    const token = this.ensureMcpToken();
+    invoke('mcp_start', { token, port: MCP_PORT }).then(() => this.setState({ mcpRunning: true })).catch((e) => this.pushToast({ type: 'err', title: 'MCP failed to start', msg: String(e) }));
+  };
+  mcpRespond = (allow) => {
+    const r = this.state.approvalReq;
+    if (!r) return;
+    if (isTauri) invoke('mcp_approval_respond', { id: r.id, allow }).catch(() => {});
+    this.setState({ approvalReq: null });
+    if (allow) setTimeout(() => this.refreshMcp(), 600);
+  };
+  toggleHostAgent(id) {
+    this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, agentAllowed: !h.agentAllowed } : h) }));
+  }
   componentDidUpdate(prevProps, prevState) {
     if (this.state.paletteOpen && !prevState.paletteOpen && this.paletteRef.current) {
       this.paletteRef.current.focus();
@@ -765,14 +813,21 @@ export default class App extends React.Component<any, any> {
     ] };
     this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', paletteOpen: false, ...(silent ? {} : { connecting: { host, secret, tabId: id, failed: false, step: 0 } }) }));
   }
-  handlePaneConnected(tab) {
+  // Flip a pane's live-connection flag (drives the orange dot on the tab).
+  setPaneConnected(tabId, paneId, val) {
+    this.setState(s => ({ tabs: s.tabs.map(t => t.id === tabId ? { ...t, panes: t.panes.map(p => p.id === paneId ? { ...p, connected: val } : p) } : t) }));
+  }
+  handlePaneConnected(tab, paneId) {
+    this.setPaneConnected(tab.id, paneId, true);
     const c = this.state.connecting;
     if (c && c.tabId === tab.id) {
       this.setState({ connecting: null });
       this.pushToast({ type: 'ok', title: 'Connected', msg: c.host.user + '@' + c.host.addr });
     }
   }
-  handlePaneError(tab, msg) {
+  handlePaneClosed(tab, paneId) { this.setPaneConnected(tab.id, paneId, false); }
+  handlePaneError(tab, paneId, msg) {
+    this.setPaneConnected(tab.id, paneId, false);
     const c = this.state.connecting;
     if (c && c.tabId === tab.id) {
       this.setState(s => ({ connecting: s.connecting ? { ...s.connecting, failed: true } : null }));
@@ -813,26 +868,71 @@ export default class App extends React.Component<any, any> {
     if (c && c.tabId) this.closeTab(c.tabId, true);
   };
 
-  // Real transfer over SFTP, progress streamed from the backend via a Channel.
-  startTransfer(file, dir) {
-    if (this.state.transfer || !this.state.sftpId || file.kind === 'dir') return;
+  // ---- SFTP transfer queue (multi-file / folder drag-drop) ----
+  toggleSel(side, name) {
+    const key = side === 'local' ? 'selLocal' : 'selRemote';
+    this.setState(s => { const cur = s[key]; return { [key]: cur.includes(name) ? cur.filter(n => n !== name) : [...cur, name] }; });
+  }
+  // Drop onto the opposite pane: enqueue the dragged item(s) and start draining.
+  sftpDrop(targetSide) {
+    const d = this._drag;
+    this._drag = null;
+    this.setState({ dragOver: null });
+    if (!d || d.side === targetSide) return;
+    const dir = targetSide === 'remote' ? 'up' : 'down';
+    const items = (d.items || []).filter(it => it && it.name && it.name !== '..');
+    if (!items.length) return;
+    this.setState(s => ({ queue: [...s.queue, ...items.map(file => ({ file, dir }))] }), () => this.processQueue());
+  }
+  processQueue() {
+    if (this.state.transfer || this.state.conflict || !this.state.sftpId) return;
+    const q = this.state.queue;
+    // Batch drained: forget any "apply to all" choice so the next drop prompts again.
+    if (!q.length) { if (this.state.conflictPolicy || this.state.conflictAll) this.setState({ conflictPolicy: null, conflictAll: false }); return; }
+    const next = q[0];
+    this.setState({ queue: q.slice(1) }, () => {
+      const { file, dir } = next;
+      const destList = dir === 'up' ? this.state.remoteFiles : this.state.localFiles;
+      const exists = destList.some(e => e.name === file.name);
+      if (exists) {
+        const policy = this.state.conflictPolicy;
+        if (policy === 'skip') { this.pushToast({ type: 'info', title: 'Skipped', msg: file.name }); this.processQueue(); return; }
+        if (policy !== 'replace') { this.setState({ conflict: { file, dir }, conflictAll: false }); return; }
+      }
+      this.doTransfer(file, dir);
+    });
+  }
+  resolveConflict = (action) => {
+    const c = this.state.conflict;
+    if (!c) return;
+    const all = this.state.conflictAll;
+    this.setState({ conflict: null, conflictAll: false, conflictPolicy: all ? action : this.state.conflictPolicy }, () => {
+      if (action === 'replace') this.doTransfer(c.file, c.dir);
+      else { this.pushToast({ type: 'info', title: 'Skipped', msg: c.file.name }); this.processQueue(); }
+    });
+  };
+  // One transfer (file or recursive folder), progress streamed via a Channel.
+  doTransfer(file, dir) {
+    if (this.state.transfer || !this.state.sftpId) return;
     const id = this.state.sftpId;
     const join = (a, b) => (a.endsWith('/') ? a : a + '/') + b;
     const localFull = join(this.state.localPath, file.name);
     const remoteFull = join(this.state.remotePath, file.name);
+    const isDir = file.kind === 'dir';
     this.setState({ transfer: { name: file.name, pct: 0, dir } });
     const onProgress = new Channel();
     onProgress.onmessage = (p) => this.setState(s => (s.transfer ? { transfer: { ...s.transfer, pct: p } } : {}));
-    const run = dir === 'up'
-      ? invoke('sftp_put', { id, localPath: localFull, remotePath: remoteFull, onProgress })
-      : invoke('sftp_get', { id, remotePath: remoteFull, localPath: localFull, onProgress });
-    run.then(() => {
-      this.setState({ transfer: null });
+    const cmd = dir === 'up' ? (isDir ? 'sftp_put_dir' : 'sftp_put') : (isDir ? 'sftp_get_dir' : 'sftp_get');
+    const args = dir === 'up'
+      ? { id, localPath: localFull, remotePath: remoteFull, onProgress }
+      : { id, remotePath: remoteFull, localPath: localFull, onProgress };
+    invoke(cmd, args).then(() => {
       this.pushToast({ type: 'ok', title: dir === 'up' ? 'Uploaded' : 'Downloaded', msg: file.name });
       if (dir === 'up') this.listRemote(this.state.remotePath); else this.listLocal(this.state.localPath);
+      this.setState({ transfer: null }, () => this.processQueue());
     }).catch((e) => {
-      this.setState({ transfer: null });
       this.pushToast({ type: 'err', title: 'Transfer failed', msg: String(e) });
+      this.setState({ transfer: null }, () => this.processQueue());
     });
   }
 
@@ -844,7 +944,7 @@ export default class App extends React.Component<any, any> {
   closeSftp() {
     const id = this.state.sftpId;
     if (id && isTauri) invoke('sftp_disconnect', { id }).catch(() => {});
-    this.setState({ sftpOpen: false, sftpId: null, sftpStatus: 'idle', transfer: null });
+    this.setState({ sftpOpen: false, sftpId: null, sftpStatus: 'idle', transfer: null, conflict: null, conflictAll: false, conflictPolicy: null });
   }
   openSftp() {
     const tab = this.state.tabs.find(t => t.id === this.state.activeTabId);
@@ -853,7 +953,7 @@ export default class App extends React.Component<any, any> {
     if (!pane) { this.setState({ sftpStatus: 'error', sftpErr: 'Open an SSH connection first, then reopen SFTP.' }); return; }
     const id = tab.id + ':sftp';
     const h = pane.host;
-    this.setState({ sftpStatus: 'connecting', sftpErr: '', sftpId: id, localFiles: [], remoteFiles: [] });
+    this.setState({ sftpStatus: 'connecting', sftpErr: '', sftpId: id, localFiles: [], remoteFiles: [], conflict: null, conflictAll: false, conflictPolicy: null });
     invoke('sftp_connect', { id, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth || 'password', secret: pane.secret || '', keyPath: h.keyPath || '' })
       .then(async (home) => {
         const lhome = await invoke('local_home');
@@ -864,12 +964,12 @@ export default class App extends React.Component<any, any> {
       .catch((e) => this.setState({ sftpStatus: 'error', sftpErr: String(e) }));
   }
   listLocal(path) {
-    invoke('local_list', { path }).then((files) => this.setState({ localFiles: files, localPath: path })).catch((e) => this.setState({ sftpErr: String(e) }));
+    invoke('local_list', { path }).then((files) => this.setState({ localFiles: files, localPath: path, selLocal: [] })).catch((e) => this.setState({ sftpErr: String(e) }));
   }
   listRemote(path) {
     const id = this.state.sftpId;
     if (!id) return;
-    invoke('sftp_list', { id, path }).then((files) => this.setState({ remoteFiles: files, remotePath: path })).catch((e) => this.setState({ sftpErr: String(e) }));
+    invoke('sftp_list', { id, path }).then((files) => this.setState({ remoteFiles: files, remotePath: path, selRemote: [] })).catch((e) => this.setState({ sftpErr: String(e) }));
   }
 
   // ---- encrypted import / export ----
@@ -1082,10 +1182,11 @@ export default class App extends React.Component<any, any> {
 
     const lineColor = (t) => ({ cmd: theme.accent, out: theme.fg, dim: '#5c5c66', sys: '#7e7e88', ok: '#46d9a0', err: '#ff6b78', accent: theme.accent }[t] || theme.fg);
 
-    const panes = (activeTab ? activeTab.panes : []).map((p, i) => {
-      const sizes = activeTab.sizes || [];
-      const flex = sizes[i] || (100 / activeTab.panes.length);
-      const active = p.id === s.activePaneId;
+    const mkPanes = (tab) => tab.panes.map((p, i) => {
+      const sizes = tab.sizes || [];
+      const flex = sizes[i] || (100 / tab.panes.length);
+      const active = p.id === s.activePaneId && tab.id === s.activeTabId;
+      const tlayout = tab.layout;
       return {
         id: p.id, idx: i, notFirst: i > 0, active,
         cwd: p.cwd, input: p.input,
@@ -1095,31 +1196,45 @@ export default class App extends React.Component<any, any> {
         live: !!p.live, kind: p.kind || 'ssh', sessionId: p.sessionId, hostObj: p.live ? p.host : null, secret: p.secret, keyText: p.keyText,
         termTheme: { bg: theme.bg, fg: theme.fg, accent: theme.accent, ansi: theme.ansi }, fontSize: s.settings.fontSize,
         cursor: s.settings.cursor, scrollback: parseInt(s.settings.scrollback, 10) || 1000,
-        onConnected: () => this.handlePaneConnected(activeTab), onError: (msg) => this.handlePaneError(activeTab, msg),
-        onHostKey: (fp, key) => this.handleHostKey(activeTab, fp, key),
+        onConnected: () => this.handlePaneConnected(tab, p.id), onError: (msg) => this.handlePaneError(tab, p.id, msg),
+        onClosed: () => this.handlePaneClosed(tab, p.id),
+        onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
         boxStyle: { position:'relative', flexGrow:flex, flexShrink:1, flexBasis:0, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(255,122,89,.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.12)' : 'none', transition:'border-color .15s ease' },
-        gutterStyle: layout === 'row'
+        gutterStyle: tlayout === 'row'
           ? { position:'absolute', left:'-5px', top:0, width:'10px', height:'100%', cursor:'col-resize', zIndex:5 }
           : { position:'absolute', top:'-5px', left:0, height:'10px', width:'100%', cursor:'row-resize', zIndex:5 },
         headStyle: { display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px', borderBottom:'1px solid ' + (active ? 'rgba(255,122,89,.16)' : '#16161c'), background:'rgba(0,0,0,.2)', flex:'none' },
         termStyle: { flex:1, overflow:'auto', padding:'10px 13px 13px', color:theme.fg, caretColor:theme.accent, fontSize:s.settings.fontSize + 'px', lineHeight:'1.55', background:theme.bg },
         lines: (p.lines || []).map(l => ({ display: (l.x === '' ? ' ' : l.x), color: lineColor(l.t) })),
         onActivate: () => { this.setState({ activePaneId: p.id }); const el = this.inputRefs[p.id]; if (el) setTimeout(() => el.focus(), 0); },
-        onInput: (e) => { const v = e.target.value; this.setState(st => ({ tabs: st.tabs.map(t => t.id === activeTab.id ? { ...t, panes: t.panes.map(pp => pp.id === p.id ? { ...pp, input: v } : pp) } : t) })); },
+        onInput: (e) => { const v = e.target.value; this.setState(st => ({ tabs: st.tabs.map(t => t.id === tab.id ? { ...t, panes: t.panes.map(pp => pp.id === p.id ? { ...pp, input: v } : pp) } : t) })); },
         onKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.runCommand(p.id, e.target.value); } },
         onClose: (e) => { e.stopPropagation(); this.closePaneById(p.id); },
         onGutterDown: (e) => this.startResize(i, e),
         setRef: (el) => { this.inputRefs[p.id] = el; }
       };
     });
+    const panes = activeTab ? mkPanes(activeTab) : [];
+    // Every tab's panes stay mounted; inactive tabs are hidden so their SSH/PTY
+    // sessions (and xterm scrollback) survive a tab switch — only closeTab kills them.
+    const tabPanes = s.tabs.map(t => ({
+      id: t.id, active: t.id === s.activeTabId,
+      wrapStyle: t.id === s.activeTabId
+        ? { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: t.layout === 'row' ? 'row' : 'column', gap:'8px' }
+        : { display:'none' },
+      panes: mkPanes(t),
+    }));
 
-    const tabs = s.tabs.map(t => ({
-      id: t.id, title: t.title, active: t.id === s.activeTabId,
-      style: { display:'flex', alignItems:'center', gap:'8px', padding:'0 8px 0 11px', height:'30px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: t.id === s.activeTabId ? '#ededf0' : '#8b8b95', background: t.id === s.activeTabId ? '#15151b' : 'transparent', border:'1px solid ' + (t.id === s.activeTabId ? '#26262e' : 'transparent'), maxWidth:'170px', flex:'none' },
-      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: t.id === s.activeTabId ? '#ff7a59' : '#3a3a44', flex:'none' },
+    const tabs = s.tabs.map(t => {
+      const sel = t.id === s.activeTabId;                                 // selected tab → outline + shadow
+      const conn = t.panes.some(p => p.live && p.connected);             // any live pane connected → orange dot
+      return {
+      id: t.id, title: t.title, active: sel,
+      style: { display:'flex', alignItems:'center', gap:'8px', padding:'0 8px 0 11px', height:'30px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: sel ? '#ededf0' : '#8b8b95', background: sel ? '#15151b' : 'transparent', border:'1px solid ' + (sel ? 'rgba(255,122,89,.45)' : 'transparent'), boxShadow: sel ? '0 0 0 1px rgba(255,122,89,.12), 0 2px 9px rgba(0,0,0,.4)' : 'none', maxWidth:'170px', flex:'none' },
+      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: conn ? '#ff7a59' : '#3a3a44', flex:'none' },
       onSelect: () => this.setState({ activeTabId: t.id, activePaneId: t.panes[0].id }),
       onClose: (e) => { e.stopPropagation(); this.closeTab(t.id); }
-    }));
+    };});
 
     const themesList = Object.keys(this.THEMES).map(id => {
       const th = this.THEMES[id];
@@ -1160,18 +1275,49 @@ export default class App extends React.Component<any, any> {
     const joinPath = (a, b) => (a === '/' ? '' : (a || '').replace(/\/+$/, '')) + '/' + b;
     const parentPath = (p) => { const t = (p || '/').replace(/\/+$/, ''); const i = t.lastIndexOf('/'); return i <= 0 ? '/' : t.slice(0, i); };
     const navTo = (side, path) => { if (side === 'local') this.listLocal(path); else this.listRemote(path); };
+    const selOf = (side) => (side === 'local' ? s.selLocal : s.selRemote);
+    const rowStyle = (isDir, selected) => ({ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '5px', cursor: isDir ? 'pointer' : 'grab', fontSize: '11.5px', color: selected ? '#ededf0' : '#c7c7cf', background: selected ? 'rgba(255,122,89,.14)' : 'transparent' });
     const mkFile = (f, side) => {
       const isDir = f.kind === 'dir';
       const base = side === 'local' ? s.localPath : s.remotePath;
+      const selected = selOf(side).includes(f.name);
       return {
-        name: f.name, isDir,
+        name: f.name, isDir, selected, isUp: false,
         glyph: isDir ? '▸' : '◦', glyphColor: isDir ? '#ff7a59' : '#54545e',
         sub: isDir ? 'dir' : (f.size || ''),
-        onDragStart: (e) => { if (isDir) return; this._drag = { file: f, side }; try { e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', f.name); } catch (_) {} },
-        onOpen: isDir ? () => navTo(side, joinPath(base, f.name)) : null,
+        rowStyle: rowStyle(isDir, selected),
+        onClick: () => this.toggleSel(side, f.name),
+        onDouble: isDir ? () => navTo(side, joinPath(base, f.name)) : null,
+        // Drag the whole selection if this row is part of it, else just this row.
+        onDragStart: (e) => {
+          const sel = selOf(side);
+          const names = sel.includes(f.name) ? sel : [f.name];
+          const list = side === 'local' ? s.localFiles : s.remoteFiles;
+          const items = list.filter(x => names.includes(x.name)).map(x => ({ name: x.name, kind: x.kind }));
+          this._drag = { side, items };
+          try {
+            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.setData('text/plain', names.join(','));
+            if (names.length > 1) {
+              // Custom drag image: show the count instead of a single filename.
+              const ghost = document.createElement('div');
+              ghost.textContent = names.length + ' items';
+              ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;padding:6px 12px;background:#ff7a59;color:#0c0b0a;font:600 12px/1 "JetBrains Mono",ui-monospace,monospace;border-radius:8px;white-space:nowrap;';
+              document.body.appendChild(ghost);
+              e.dataTransfer.setDragImage(ghost, 12, 12);
+              setTimeout(() => ghost.remove(), 0);
+            }
+          } catch (_) {}
+        },
       };
     };
-    const upEntry = (side) => ({ name: '..', isDir: true, glyph: '↰', glyphColor: '#8b8b95', sub: 'up', onDragStart: () => {}, onOpen: () => navTo(side, parentPath(side === 'local' ? s.localPath : s.remotePath)) });
+    const upEntry = (side) => ({
+      name: '..', isDir: true, isUp: true, selected: false,
+      glyph: '↰', glyphColor: '#8b8b95', sub: 'up',
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '5px', cursor: 'pointer', fontSize: '11.5px', color: '#8b8b95' },
+      onClick: () => navTo(side, parentPath(side === 'local' ? s.localPath : s.remotePath)),
+      onDouble: null, onDragStart: () => {},
+    });
 
     // connecting
     let connecting = null;
@@ -1202,6 +1348,7 @@ export default class App extends React.Component<any, any> {
     const transfer = s.transfer ? {
       name: s.transfer.name,
       arrow: s.transfer.dir === 'up' ? '↑' : '↓',
+      queued: s.queue.length,
       pctLabel: Math.round(s.transfer.pct) + '%',
       fillStyle: { height:'100%', width: s.transfer.pct + '%', background:'linear-gradient(90deg,#ff7a59,#ffb38a)', borderRadius:'4px', transition:'width .12s linear' }
     } : null;
@@ -1298,7 +1445,7 @@ export default class App extends React.Component<any, any> {
     return {
       sidebarOpen: s.sidebarOpen, sftpOpen: s.sftpOpen, paletteOpen: s.paletteOpen, themesOpen: s.themesOpen,
       paletteQuery: s.paletteQuery, paletteRef: this.paletteRef, paletteItems,
-      tabs, panes, paneWrapRef: this.paneWrap,
+      tabs, panes, tabPanes, paneWrapRef: this.paneWrap,
       paneWrapStyle: { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: layout === 'row' ? 'row' : 'column', gap:'8px' },
       themesList, themesCount: Object.keys(this.THEMES).length,
       localFiles: [upEntry('local'), ...s.localFiles.map(f => mkFile(f, 'local'))],
@@ -1307,13 +1454,20 @@ export default class App extends React.Component<any, any> {
       localPath: s.localPath || '~', remotePath: s.remotePath || '/', sftpHost: activeTab ? activeTab.title : '',
       sftpReady: s.sftpStatus === 'ready', sftpMsg: s.sftpErr || (s.sftpStatus === 'connecting' ? 'Connecting…' : 'Not connected'),
       transferActive: !!transfer, transfer,
+      conflictOpen: !!s.conflict,
+      conflictName: s.conflict ? s.conflict.file.name : '',
+      conflictDest: s.conflict ? (s.conflict.dir === 'up' ? s.remotePath : s.localPath) : '',
+      conflictAll: s.conflictAll,
+      toggleConflictAll: () => this.setState(st => ({ conflictAll: !st.conflictAll })),
+      conflictReplace: () => this.resolveConflict('replace'),
+      conflictSkip: () => this.resolveConflict('skip'),
       connectingActive: !!connecting, connecting,
       connectingCardStyle: { width:'420px', maxWidth:'90%', background:'#0c0c10', border:'1px solid #26262e', borderRadius:'15px', padding:'28px', boxShadow:'0 36px 90px rgba(0,0,0,.65)', animation: (s.connecting && s.connecting.failed) ? 'acaShake .5s ease' : 'acaModal .18s cubic-bezier(.2,.8,.2,1)' },
       toasts,
       statusTheme: theme.name, statusHost: activeTab ? (activeTab.user + '@' + activeTab.addr) : '',
       onDragOver: (e) => { e.preventDefault(); try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {} },
-      onDropRemote: (e) => { e.preventDefault(); const d = this._drag; if (d && d.side === 'local') this.startTransfer(d.file, 'up'); this._drag = null; this.setState({ dragOver: null }); },
-      onDropLocal: (e) => { e.preventDefault(); const d = this._drag; if (d && d.side === 'remote') this.startTransfer(d.file, 'down'); this._drag = null; this.setState({ dragOver: null }); },
+      onDropRemote: (e) => { e.preventDefault(); this.sftpDrop('remote'); },
+      onDropLocal: (e) => { e.preventDefault(); this.sftpDrop('local'); },
       onDragEnterRemote: () => this.setState({ dragOver: 'remote' }),
       onDragEnterLocal: () => this.setState({ dragOver: 'local' }),
       onDragLeave: () => {},
@@ -1439,6 +1593,16 @@ export default class App extends React.Component<any, any> {
       submitForward: () => this.submitForward(),
       cancelForward: () => this.setState({ fwdPrompt: null }),
       forwardCount: s.forwards.length,
+      mcpOpen: s.mcpOpen, mcpRunning: s.mcpRunning, mcpUrl: MCP_URL, mcpToken: s.settings.mcpToken || '',
+      mcpLog: s.mcpLog, mcpExposedCount: s.hosts.filter(h => h.agentAllowed).length,
+      mcpHosts: s.hosts.map(h => ({ id: h.id, name: h.name, target: h.user + '@' + h.addr, allowed: !!h.agentAllowed, onToggle: () => this.toggleHostAgent(h.id) })),
+      mcpConfig: JSON.stringify({ mcpServers: { sshache: { url: MCP_URL, headers: { Authorization: 'Bearer ' + (s.settings.mcpToken || '<token>') } } } }, null, 2),
+      openMcp: () => this.openMcp(), closeMcp: () => this.setState({ mcpOpen: false }), toggleMcp: () => this.toggleMcp(),
+      copyMcp: (text) => { try { navigator.clipboard.writeText(text).then(() => this.pushToast({ type: 'ok', title: 'Copied', msg: '' })).catch(() => {}); } catch (e) {} },
+      approvalOpen: !!s.approvalReq,
+      approvalHost: s.approvalReq ? s.approvalReq.host : '',
+      approvalCommand: s.approvalReq ? s.approvalReq.command : '',
+      approve: () => this.mcpRespond(true), deny: () => this.mcpRespond(false),
       onExport: () => this.exportConfig(),
       onImport: () => this.importConfig(),
       ioOpen: !!s.ioPrompt,
@@ -1641,8 +1805,9 @@ export default class App extends React.Component<any, any> {
 
                 {/* WORKSPACE */}
                 <div style={css("flex:1;min-height:0;display:flex;padding:10px;")}>
-                  <div ref={v.paneWrapRef} style={v.paneWrapStyle}>
-                    {v.panes.map((pane) => (
+                  {v.tabPanes.map((tp) => (
+                  <div key={tp.id} ref={tp.active ? v.paneWrapRef : null} style={tp.wrapStyle}>
+                    {tp.panes.map((pane) => (
                       <div key={pane.id} onMouseDown={pane.onActivate} style={pane.boxStyle}>
                         {pane.notFirst && (<div onMouseDown={pane.onGutterDown} style={pane.gutterStyle}></div>)}
                         <div style={pane.headStyle}>
@@ -1653,7 +1818,7 @@ export default class App extends React.Component<any, any> {
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
                         {pane.live ? (
-                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onHostKey={pane.onHostKey} register={this.registerTerm} />
+                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} />
                         ) : (
                         <div style={pane.termStyle}>
                           {pane.lines.map((line, li) => (
@@ -1668,6 +1833,7 @@ export default class App extends React.Component<any, any> {
                       </div>
                     ))}
                   </div>
+                  ))}
 
                   {/* SFTP PANEL */}
                   {v.sftpOpen && (
@@ -1688,7 +1854,7 @@ export default class App extends React.Component<any, any> {
                           </div>
                           <div style={css("flex:1;overflow:auto;padding:5px;")}>
                             {v.localFiles.map((file, i) => (
-                              <Hov key={i} draggable={!file.isDir} onDragStart={file.onDragStart} onClick={file.onOpen || undefined} s={"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:" + (file.isDir ? "pointer" : "grab") + ";font-size:11.5px;color:#c7c7cf;"} h="background:#15151b;">
+                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} s={file.rowStyle} h="background:#15151b;">
                                 <span style={{ color: file.glyphColor, width: "11px", textAlign: "center", flex: "none" }}>{file.glyph}</span>
                                 <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{file.name}</span>
                                 <span style={css("color:#54545e;font-size:10px;")}>{file.sub}</span>
@@ -1703,7 +1869,7 @@ export default class App extends React.Component<any, any> {
                           </div>
                           <div style={css("flex:1;overflow:auto;padding:5px;")}>
                             {v.remoteFiles.map((file, i) => (
-                              <Hov key={i} draggable={!file.isDir} onDragStart={file.onDragStart} onClick={file.onOpen || undefined} s={"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:" + (file.isDir ? "pointer" : "grab") + ";font-size:11.5px;color:#c7c7cf;"} h="background:#15151b;">
+                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} s={file.rowStyle} h="background:#15151b;">
                                 <span style={{ color: file.glyphColor, width: "11px", textAlign: "center", flex: "none" }}>{file.glyph}</span>
                                 <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{file.name}</span>
                                 <span style={css("color:#54545e;font-size:10px;")}>{file.sub}</span>
@@ -1719,7 +1885,7 @@ export default class App extends React.Component<any, any> {
                         <div style={css("padding:11px 13px;border-top:1px solid #16161c;")}>
                           <div style={css("display:flex;align-items:center;margin-bottom:7px;")}>
                             <span style={css("color:#ff7a59;margin-right:7px;")}>{v.transfer.arrow}</span>
-                            <span style={css("font-size:11px;color:#cfcfd6;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.transfer.name}</span>
+                            <span style={css("font-size:11px;color:#cfcfd6;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.transfer.name}{v.transfer.queued > 0 ? ` · +${v.transfer.queued} queued` : ''}</span>
                             <span style={css("font-size:11px;color:#9a9aa3;")}>{v.transfer.pctLabel}</span>
                           </div>
                           <div style={css("height:4px;background:#16161c;border-radius:4px;overflow:hidden;")}>
@@ -2004,6 +2170,18 @@ export default class App extends React.Component<any, any> {
                 </div>
 
                 <div>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:12px;")}>AI agent access</div>
+                  <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;")}>
+                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: v.mcpRunning ? '#46d9a0' : '#54545e', flex: 'none' }}></span>
+                    <div style={css("flex:1;")}>
+                      <div style={css("font-size:11.5px;color:#cfcfd6;")}>MCP server {v.mcpRunning ? '· running' : '· stopped'}</div>
+                      <div style={css("font-size:10.5px;color:#54545e;margin-top:2px;")}>Let an AI agent use selected hosts, with per-command approval.</div>
+                    </div>
+                    <Hov as="button" onClick={v.openMcp} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Manage</Hov>
+                  </div>
+                </div>
+
+                <div>
                   <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:12px;")}>Local data</div>
                   <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;")}>
                     <span style={css("width:7px;height:7px;border-radius:50%;background:#46d9a0;box-shadow:0 0 7px rgba(70,217,160,.6);flex:none;")}></span>
@@ -2188,6 +2366,121 @@ export default class App extends React.Component<any, any> {
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.cancelConfirmClose} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
                 <Hov as="button" onClick={v.confirmCloseTab} s="padding:9px 16px;background:transparent;border:1px solid rgba(255,107,120,.45);border-radius:8px;color:#ff6b78;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:rgba(255,107,120,.12);">Close session</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MCP — AI AGENT ACCESS */}
+        {v.mcpOpen && (
+          <div onClick={v.closeMcp} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:66;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:660px;max-width:96%;max-height:88vh;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:11px;padding:18px 22px;border-bottom:1px solid #18181f;")}>
+                <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: v.mcpRunning ? '#46d9a0' : '#54545e', boxShadow: v.mcpRunning ? '0 0 7px rgba(70,217,160,.6)' : 'none', flex: 'none' }}></span>
+                <div style={css("flex:1;")}>
+                  <div style={css("font-size:15px;font-weight:700;color:#f2f2f5;")}>AI agent access · MCP</div>
+                  <div style={css("font-size:11px;color:#6a6a74;margin-top:2px;")}>{v.mcpRunning ? 'Running on 127.0.0.1' : 'Stopped'} · {v.mcpExposedCount} host(s) exposed</div>
+                </div>
+                <Hov as="button" onClick={v.toggleMcp} s={v.mcpRunning ? "padding:8px 16px;background:transparent;border:1px solid rgba(255,107,120,.4);border-radius:8px;color:#ff6b78;font:inherit;font-size:12px;cursor:pointer;" : "padding:8px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;"} h={v.mcpRunning ? "background:rgba(255,107,120,.12);" : "background:#ff8d70;"}>{v.mcpRunning ? 'Stop' : 'Start'}</Hov>
+                <span onClick={v.closeMcp} style={css("width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border:1px solid #26262e;border-radius:6px;cursor:pointer;")}>×</span>
+              </div>
+              <div style={css("flex:1;overflow:auto;padding:18px 22px;display:flex;flex-direction:column;gap:20px;")}>
+                <div style={css("display:flex;gap:9px;padding:11px 13px;background:rgba(70,217,160,.05);border:1px solid rgba(70,217,160,.2);border-radius:9px;")}>
+                  <span style={css("color:#46d9a0;flex:none;")}>⚿</span>
+                  <div style={css("font-size:11px;color:#9a9aa3;line-height:1.55;")}>Bound to <span style={css("color:#cfcfd6;")}>localhost</span> behind a bearer token. Only the hosts you enable below are visible. <span style={css("color:#cfcfd6;")}>Every command needs your approval.</span> Secrets are never sent to the agent.</div>
+                </div>
+
+                {v.mcpRunning && (
+                  <div style={css("display:flex;flex-direction:column;gap:10px;")}>
+                    <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;")}>Connection</div>
+                    <div style={css("display:flex;align-items:center;gap:8px;")}>
+                      <span style={css("font-size:10.5px;color:#6a6a74;width:48px;flex:none;")}>URL</span>
+                      <span style={css("flex:1;font-size:11.5px;color:#ededf0;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.mcpUrl}</span>
+                      <Hov as="button" onClick={() => v.copyMcp(v.mcpUrl)} s="padding:8px 11px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;" h="background:#16161c;color:#ededf0;">Copy</Hov>
+                    </div>
+                    <div style={css("display:flex;align-items:center;gap:8px;")}>
+                      <span style={css("font-size:10.5px;color:#6a6a74;width:48px;flex:none;")}>Token</span>
+                      <span style={css("flex:1;font-size:11.5px;color:#9a9aa3;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.mcpToken.slice(0, 8)}…{v.mcpToken.slice(-4)}</span>
+                      <Hov as="button" onClick={() => v.copyMcp(v.mcpToken)} s="padding:8px 11px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;" h="background:#16161c;color:#ededf0;">Copy</Hov>
+                    </div>
+                    <div style={css("display:flex;align-items:flex-start;gap:8px;")}>
+                      <span style={css("font-size:10.5px;color:#6a6a74;width:48px;flex:none;margin-top:8px;")}>Config</span>
+                      <pre style={css("flex:1;margin:0;font-size:10.5px;color:#9a9aa3;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:10px 12px;overflow:auto;white-space:pre;")}>{v.mcpConfig}</pre>
+                      <Hov as="button" onClick={() => v.copyMcp(v.mcpConfig)} s="padding:8px 11px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;margin-top:0;" h="background:#16161c;color:#ededf0;">Copy</Hov>
+                    </div>
+                  </div>
+                )}
+
+                <div style={css("display:flex;flex-direction:column;gap:8px;")}>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;")}>Hosts the agent may use</div>
+                  {v.mcpHosts.length === 0 && (<div style={css("font-size:11.5px;color:#54545e;")}>No hosts yet.</div>)}
+                  {v.mcpHosts.map((h) => (
+                    <div key={h.id} style={css("display:flex;align-items:center;gap:10px;padding:9px 12px;background:#0e0e12;border:1px solid #1c1c24;border-radius:8px;")}>
+                      <div style={css("flex:1;min-width:0;")}>
+                        <div style={css("font-size:12px;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{h.name}</div>
+                        <div style={css("font-size:10.5px;color:#6a6a74;margin-top:1px;")}>{h.target}</div>
+                      </div>
+                      <div onClick={h.onToggle} style={{ width: '38px', height: '22px', borderRadius: '11px', background: h.allowed ? '#46d9a0' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
+                        <span style={{ position: 'absolute', top: '2px', left: h.allowed ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={css("display:flex;flex-direction:column;gap:6px;")}>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;")}>Recent activity</div>
+                  {(!v.mcpLog || v.mcpLog.length === 0) && (<div style={css("font-size:11.5px;color:#54545e;")}>No commands yet.</div>)}
+                  {(v.mcpLog || []).slice(-12).reverse().map((l, i) => (
+                    <div key={i} style={css("display:flex;align-items:center;gap:8px;font-size:11px;padding:6px 2px;")}>
+                      <span style={{ color: l.allowed ? '#46d9a0' : '#ff6b78', flex: 'none' }}>{l.allowed ? '✓' : '✕'}</span>
+                      <span style={css("color:#9a9aa3;flex:none;")}>{l.host}</span>
+                      <span style={css("color:#cfcfd6;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:inherit;")}>{l.command}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MCP COMMAND APPROVAL */}
+        {v.approvalOpen && (
+          <div style={css("position:absolute;inset:0;background:rgba(5,5,7,.72);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:90;animation:acaFade .12s ease;")}>
+            <div style={css("width:500px;max-width:96%;background:#0c0c10;border:1px solid rgba(255,122,89,.4);border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:11px;padding:18px 20px 8px;")}>
+                <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(255,122,89,.12);color:#ff7a59;font-size:14px;")}>›_</span>
+                <div style={css("flex:1;")}>
+                  <div style={css("font-size:14px;font-weight:700;color:#f2f2f5;")}>Agent wants to run a command</div>
+                  <div style={css("font-size:11px;color:#6a6a74;margin-top:1px;")}>on <span style={css("color:#cfcfd6;")}>{v.approvalHost}</span></div>
+                </div>
+              </div>
+              <div style={css("padding:6px 20px 14px;")}>
+                <pre style={css("margin:0;font-size:12px;color:#ededf0;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;overflow:auto;white-space:pre-wrap;word-break:break-word;")}>{v.approvalCommand}</pre>
+                <div style={css("font-size:10.5px;color:#54545e;margin-top:9px;")}>Approve only if you trust this command. It runs with this host's saved credentials.</div>
+              </div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                <Hov as="button" onClick={v.deny} s="padding:9px 16px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Deny</Hov>
+                <Hov as="button" onClick={v.approve} s="padding:9px 18px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Approve &amp; run</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SFTP FILE-EXISTS CONFLICT */}
+        {v.conflictOpen && (
+          <div onClick={v.conflictSkip} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:78;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:420px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>File already exists</div>
+              <div style={css("padding:8px 20px 14px;font-size:12px;color:#cfcfd6;line-height:1.55;")}><span style={css("color:#ededf0;font-weight:600;")}>{v.conflictName}</span> already exists in <span style={css("color:#9a9aa3;")}>{v.conflictDest}</span>. Replace it or skip?</div>
+              <div style={css("display:flex;align-items:center;gap:12px;padding:0 20px 14px;")}>
+                <div style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Apply to all</div>
+                <div onClick={v.toggleConflictAll} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.conflictAll ? '#ff7a59' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
+                  <span style={{ position: 'absolute', top: '2px', left: v.conflictAll ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
+                </div>
+              </div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                <Hov as="button" onClick={v.conflictSkip} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Skip</Hov>
+                <Hov as="button" onClick={v.conflictReplace} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Replace</Hov>
               </div>
             </div>
           </div>
