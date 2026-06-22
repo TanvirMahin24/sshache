@@ -1,8 +1,13 @@
-# Cloudflare Pages config for the sshache.com static site (the `site/` folder).
-# The desktop app itself is unrelated to this config.
+# Cloudflare deploy config for the sshache.com site (the static `site/` folder).
+# Uses Workers Static Assets: `npx wrangler deploy` uploads site/ as assets —
+# there is NO build step (the site is prebuilt HTML/CSS).
 #
-# Local deploy:   npx wrangler pages deploy
-# (reads name + output dir below; needs `npx wrangler login` or CLOUDFLARE_API_TOKEN)
+# In the Cloudflare project → Settings → Build:
+#   Root directory:   /                     (NOT /site)
+#   Build command:    (leave empty)
+#   Deploy command:   npx wrangler deploy
 name = "sshache"
 compatibility_date = "2025-01-01"
-pages_build_output_dir = "site"
+
+[assets]
+directory = "./site"
