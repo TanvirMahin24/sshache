@@ -1,0 +1,8 @@
+# Cloudflare Pages config for the sshache.com static site (the `site/` folder).
+# The desktop app itself is unrelated to this config.
+#
+# Local deploy:   npx wrangler pages deploy
+# (reads name + output dir below; needs `npx wrangler login` or CLOUDFLARE_API_TOKEN)
+name = "sshache"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "site"

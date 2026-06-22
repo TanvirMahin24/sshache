@@ -1,0 +1,38 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="og-bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b0b0f"/>
+      <stop offset="1" stop-color="#0a0a0d"/>
+    </linearGradient>
+    <linearGradient id="og-tile" x1="120" y1="140" x2="290" y2="310" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff8a63"/>
+      <stop offset="0.55" stop-color="#ff5f6d"/>
+      <stop offset="1" stop-color="#ff3d7f"/>
+    </linearGradient>
+    <linearGradient id="og-text" x1="330" y1="170" x2="900" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff8a63"/>
+      <stop offset="1" stop-color="#ff3d7f"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#og-bg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="629" fill="none" stroke="#1c1c24" stroke-width="1"/>
+
+  <!-- logo mark -->
+  <rect x="120" y="140" width="170" height="170" rx="40" fill="url(#og-tile)"/>
+  <path d="M173 178 L210 215 L173 252" fill="none" stroke="#ffffff" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="204" y="235" width="37" height="15" rx="7.5" fill="#ffffff"/>
+
+  <!-- wordmark -->
+  <text x="330" y="258" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="104" font-weight="700" letter-spacing="-3" fill="url(#og-text)">SSH Ache</text>
+
+  <!-- tagline -->
+  <text x="124" y="408" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="34" font-weight="500" fill="#d6d6dd">A desktop SSH client with a clean terminal UI</text>
+
+  <!-- feature line -->
+  <text x="124" y="470" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="26" font-weight="400" fill="#8b8b95">SSH  ·  SFTP  ·  Port forwarding  ·  Host-key verification  ·  Encrypted backups</text>
+
+  <!-- footer url -->
+  <text x="124" y="556" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="30" font-weight="700" fill="#ff6b6d">sshache.com</text>
+  <text x="1076" y="556" text-anchor="end" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24" font-weight="400" fill="#54545e">macOS · Windows · Linux</text>
+</svg>

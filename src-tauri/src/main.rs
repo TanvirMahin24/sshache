@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use russh::client;
 use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::ssh_key::PublicKey;
+#[cfg(unix)]
 use russh::keys::agent::client::AgentClient;
+#[cfg(unix)]
 use russh::keys::agent::AgentIdentity;
 use russh::keys::known_hosts::{check_known_hosts, learn_known_hosts};
 use russh::keys::{decode_secret_key, load_secret_key, PrivateKeyWithHashAlg};
@@ -176,6 +178,13 @@ async fn do_auth(
                 .await
                 .map_err(|e| format!("auth: {e}"))?
         }
+        // ssh-agent talks over SSH_AUTH_SOCK (Unix). russh's connect_env is
+        // Unix-only, so on Windows fall back to password/key auth.
+        #[cfg(not(unix))]
+        "agent" => {
+            return Err("ssh-agent authentication is only available on macOS and Linux".into());
+        }
+        #[cfg(unix)]
         "agent" => {
             let mut agent = AgentClient::connect_env()
                 .await
