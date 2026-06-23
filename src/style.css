@@ -141,6 +141,15 @@ body {
     animation: none;
   }
 }
+/* Draggable divider between split panes. */
+.aca-rzbar {
+  background: var(--border2);
+  border-radius: 2px;
+  transition: background 0.15s ease;
+}
+.aca-resizer:hover .aca-rzbar {
+  background: var(--accent);
+}
 /* Gentle float for the empty-state welcome logo. */
 .aca-float {
   animation: acaFloat 4s ease-in-out infinite;

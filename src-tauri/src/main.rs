@@ -416,35 +416,75 @@ fn write_config(name: String, data: String) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| format!("write: {e}"))
 }
 
-// ---- secrets: OS keychain via the `keyring` crate (service = "sshache") ----
-// ponytail: macOS only for now (apple-native feature). Add the windows-native /
-// sync-secret-service features in Cargo.toml to cover those platforms.
-
+// ---- secrets -----------------------------------------------------------
+// Primary store is a 0600 file in the app data dir (~/.ssh-ache/secrets.json) —
+// same access posture as ~/.ssh/id_rsa, and reliable on unsigned builds where
+// macOS keychain access (bound to the app's code signature) is flaky. The OS
+// keychain is still mirrored best-effort and read as a fallback so existing
+// keychain secrets keep working.
 fn secret_entry(id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new("sshache", id).map_err(|e| e.to_string())
 }
 
+fn secrets_load() -> std::collections::HashMap<String, String> {
+    config_path("secrets")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn secrets_store(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = config_path("secrets")?;
+    let data = serde_json::to_string(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, data).map_err(|e| format!("write secrets: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn secret_get(id: String) -> Result<String, String> {
-    match secret_entry(&id)?.get_password() {
-        Ok(p) => Ok(p),
-        Err(keyring::Error::NoEntry) => Ok(String::new()),
-        Err(e) => Err(e.to_string()),
+    let map = secrets_load();
+    if let Some(v) = map.get(&id) {
+        if !v.is_empty() {
+            return Ok(v.clone());
+        }
     }
+    // fall back to the OS keychain (older installs that stored there)
+    if let Ok(entry) = secret_entry(&id) {
+        if let Ok(p) = entry.get_password() {
+            return Ok(p);
+        }
+    }
+    Ok(String::new())
 }
 
 #[tauri::command]
 fn secret_set(id: String, value: String) -> Result<(), String> {
-    secret_entry(&id)?.set_password(&value).map_err(|e| e.to_string())
+    let mut map = secrets_load();
+    map.insert(id.clone(), value.clone());
+    secrets_store(&map)?;
+    // best-effort keychain mirror (ignored if it fails, e.g. unsigned build)
+    if let Ok(entry) = secret_entry(&id) {
+        let _ = entry.set_password(&value);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn secret_delete(id: String) -> Result<(), String> {
-    match secret_entry(&id)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
+    let mut map = secrets_load();
+    if map.remove(&id).is_some() {
+        let _ = secrets_store(&map);
     }
+    if let Ok(entry) = secret_entry(&id) {
+        let _ = entry.delete_credential();
+    }
+    Ok(())
 }
 
 // Persist a server key to ~/.ssh/known_hosts after the user confirms it (Phase 3).
