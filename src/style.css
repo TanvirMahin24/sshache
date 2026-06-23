@@ -141,3 +141,21 @@ body {
     animation: none;
   }
 }
+/* Gentle float for the empty-state welcome logo. */
+.aca-float {
+  animation: acaFloat 4s ease-in-out infinite;
+}
+@keyframes acaFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aca-float {
+    animation: none;
+  }
+}
