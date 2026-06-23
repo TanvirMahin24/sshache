@@ -27,9 +27,7 @@
   <meta name="twitter:image" content="https://sshache.com/assets/og-image.png" />
 
   <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preload" href="assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin />
 
   <link rel="stylesheet" href="style.css" />
 
@@ -45,13 +43,28 @@
     "about": { "@type": "SoftwareApplication", "name": "SSH Ache", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Windows, Linux" }
   }
   </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      { "@type": "Question", "name": "Which platforms does SSH Ache run on?", "acceptedAnswer": { "@type": "Answer", "text": "macOS, Windows, and Linux. It's built with Tauri 2, so each platform gets a native build — .dmg, .msi, and .AppImage / .deb respectively." } },
+      { "@type": "Question", "name": "Where are my passwords and keys stored?", "acceptedAnswer": { "@type": "Answer", "text": "In your operating system's keychain, not in a plaintext config file. SSH Ache hands secrets to the platform's secure store and retrieves them when a connection needs them." } },
+      { "@type": "Question", "name": "Does my data leave my machine?", "acceptedAnswer": { "@type": "Answer", "text": "Your data stays on your machine, encrypted at rest. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals." } },
+      { "@type": "Question", "name": "Is the AI agent bridge safe to enable?", "acceptedAnswer": { "@type": "Answer", "text": "It's off by default. When enabled, it binds to localhost behind a bearer token, is opt-in per host, requires per-command approval in the app, and never receives your secrets." } },
+      { "@type": "Question", "name": "What happens if a server's host key changes?", "acceptedAnswer": { "@type": "Answer", "text": "SSH Ache refuses to connect and warns you. Confirm the new fingerprint through a trusted channel before accepting it — a changed key can indicate a man-in-the-middle attempt." } },
+      { "@type": "Question", "name": "How do I move my setup to a new computer?", "acceptedAnswer": { "@type": "Answer", "text": "Use the encrypted backup. Export your hosts and secrets to a password-encrypted file on the old machine, then import it with the same password on the new one." } }
+    ]
+  }
+  </script>
 </head>
 <body>
 
   <!-- ===================== Nav ===================== -->
   <header class="nav">
     <div class="container nav-inner">
-      <a class="brand" href="index.html" aria-label="SSH Ache home">
+      <a class="brand" href="/" aria-label="SSH Ache home">
         <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
         <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
       </a>
@@ -61,12 +74,12 @@
       </button>
 
       <nav class="nav-links" id="navLinks">
-        <a href="index.html#features">Features</a>
-        <a href="index.html#security">Security</a>
-        <a href="index.html#install">Install</a>
-        <a href="docs.html">Docs</a>
+        <a href="/#features">Features</a>
+        <a href="/#security">Security</a>
+        <a href="/#install">Install</a>
+        <a href="/docs">Docs</a>
         <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
-        <a class="nav-cta" href="index.html#install">Download</a>
+        <a class="nav-cta" href="/#install">Download</a>
       </nav>
     </div>
   </header>
@@ -326,7 +339,7 @@
     <div class="container">
       <div class="footer-top">
         <div class="footer-about">
-          <a class="brand" href="index.html" aria-label="SSH Ache home">
+          <a class="brand" href="/" aria-label="SSH Ache home">
             <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
             <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
           </a>
@@ -337,10 +350,10 @@
         <div class="footer-links">
           <div class="footer-col">
             <h4>Product</h4>
-            <a href="index.html#features">Features</a>
-            <a href="index.html#security">Security</a>
-            <a href="index.html#install">Install</a>
-            <a href="docs.html">Documentation</a>
+            <a href="/#features">Features</a>
+            <a href="/#security">Security</a>
+            <a href="/#install">Install</a>
+            <a href="/docs">Documentation</a>
           </div>
           <div class="footer-col">
             <h4>Project</h4>
