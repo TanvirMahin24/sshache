@@ -648,7 +648,7 @@ export default class App extends React.Component<any, any> {
       const cur = this.state.appVersion;
       if (latest && this._semverGt(latest, cur)) {
         this.setState({ update: { version: latest, url: j.html_url, asset: this._pickAsset(j.assets) } });
-        if (manual) this.pushToast({ type: 'ok', title: 'Update available', msg: 'v' + latest });
+        this.pushToast({ type: 'ok', title: 'Update available', msg: 'v' + latest + ' — open Settings to download' });
       } else {
         this.setState({ update: null });
         if (manual) this.pushToast({ type: 'info', title: "You're up to date", msg: 'v' + cur });
@@ -1595,7 +1595,7 @@ export default class App extends React.Component<any, any> {
         authIcon: authIconOf(h.auth), authLabel: authLabelOf(h.auth),
         tags: h.tags.map(t => ({ name: t })),
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
-        cardStyle: { display:'flex', flexDirection:'column', gap:'10px', padding:'15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : '#1c1c24'), borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
+        cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : '#1c1c24'), borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
         onConnect: () => this.connectHost(h),
         onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
@@ -1923,9 +1923,14 @@ export default class App extends React.Component<any, any> {
                 <img src={logoMark} width="84" height="84" alt="SSH Ache" className="aca-float" style={{ borderRadius: '24px', boxShadow: '0 0 42px rgba(var(--accent-rgb),.35)' }} />
                 <div style={{ ...css("font-size:30px;font-weight:700;margin-top:22px;letter-spacing:-.02em;"), background: 'linear-gradient(120deg,var(--accent-hi),var(--accent))', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Welcome to SSH&nbsp;Ache</div>
                 <div style={css("font-size:13px;color:#9a9aa3;margin-top:11px;max-width:460px;line-height:1.65;")}>No connections yet. Add your first server to get started — a fast, secure terminal with SFTP and port forwarding, all on your machine.</div>
-                <Hov as="button" onClick={v.openAddHost} s="margin-top:26px;display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(255,122,89,.28);" h="background:#ff8d70;">
-                  <span style={css("font-size:16px;")}>+</span><span>Add your first connection</span>
-                </Hov>
+                <div style={css("margin-top:26px;display:flex;align-items:center;gap:11px;")}>
+                  <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(255,122,89,.28);" h="background:#ff8d70;">
+                    <span style={css("font-size:16px;")}>+</span><span>Add your first connection</span>
+                  </Hov>
+                  <Hov as="button" onClick={v.onImportOne} s="display:flex;align-items:center;gap:8px;padding:13px 20px;background:#101015;border:1px solid #20202a;border-radius:10px;color:#b9b9c2;font:inherit;font-size:13px;cursor:pointer;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">
+                    <span style={css("font-size:14px;")}>⤒</span><span>Import</span>
+                  </Hov>
+                </div>
                 <div style={css("display:flex;flex-wrap:wrap;justify-content:center;gap:9px;margin-top:28px;")}>
                   {[['⌘K', 'Command palette'], ['⌘T', 'Switch theme'], ['⌘J', 'SFTP files'], ['⌘D', 'Split panes']].map((t, i) => (
                     <span key={i} style={css("display:flex;align-items:center;gap:7px;font-size:11px;color:#9a9aa3;background:#0e0e12;border:1px solid #20202a;border-radius:20px;padding:6px 13px;")}><span style={css("color:#ff7a59;font-weight:700;")}>{t[0]}</span>{t[1]}</span>
@@ -1948,6 +1953,9 @@ export default class App extends React.Component<any, any> {
                     <div style={css("font-size:11.5px;color:#6a6a74;margin-top:3px;")}>{v.filteredCount} of {v.totalHosts} connections · stored locally</div>
                   </div>
                   <span style={css("flex:1;")}></span>
+                  <Hov as="button" onClick={v.onImportOne} title="Import a connection file" s="display:flex;align-items:center;gap:7px;padding:10px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">
+                    <span style={css("font-size:13px;")}>⤒</span><span>Import</span>
+                  </Hov>
                   <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;gap:8px;padding:10px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">
                     <span style={css("font-size:15px;")}>+</span><span>New host</span>
                   </Hov>
@@ -1975,23 +1983,28 @@ export default class App extends React.Component<any, any> {
                       </div>
                       <div style={css("display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:13px;")}>
                         {group.cards.map((card) => (
-                          <Hov key={card.id} onClick={card.onConnect} s={card.cardStyle} h="border-color:rgba(255,122,89,.55);transform:translateY(-2px);">
-                            <div style={css("display:flex;align-items:center;gap:9px;")}>
+                          <Hov key={card.id} className="aca-card" onClick={card.onConnect} s={card.cardStyle} h="border-color:rgba(255,122,89,.55);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.35);">
+                            <div style={css("display:flex;align-items:center;gap:9px;min-width:0;")}>
                               <span style={card.dotStyle}></span>
-                              <span style={css("flex:1;font-size:13.5px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
-                              <Hov onClick={card.onToggleFav} title="Favorite" s={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#6a6a74', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
-                              <Hov onClick={card.onCopy} title="Copy ssh command" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⧉</Hov>
-                              <Hov onClick={card.onExport} title="Export connection" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:12px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⤓</Hov>
-                              <Hov onClick={card.onEdit} title="Edit connection" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
-                              <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;")}>{card.authIcon} {card.authLabel}</span>
+                              <span style={css("flex:1;min-width:0;font-size:14px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
+                              {card.favorite && (<span title="Favorite" style={css("font-size:12px;color:#ffcf5c;flex:none;")}>★</span>)}
+                              <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;flex:none;")}>{card.authIcon} {card.authLabel}</span>
                             </div>
-                            <div style={css("font-size:11.5px;color:#9a9aa3;font-family:inherit;")}>{card.target}<span style={css("color:#54545e;")}>:{card.port}</span></div>
+                            <div className="aca-actions" style={css("position:absolute;top:11px;right:13px;display:flex;align-items:center;gap:5px;background:#0d0d11;padding-left:10px;")}>
+                              <Hov onClick={card.onToggleFav} title={card.favorite ? 'Unfavorite' : 'Favorite'} s={{ width: '25px', height: '25px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#9a9aa3', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', background: '#101015' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
+                              <Hov onClick={card.onCopy} title="Copy ssh command" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:11px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⧉</Hov>
+                              <Hov onClick={card.onExport} title="Export connection" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:12px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⤓</Hov>
+                              <Hov onClick={card.onEdit} title="Edit connection" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:11px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
+                            </div>
+                            <div style={css("font-size:11.5px;color:#9a9aa3;font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.target}<span style={css("color:#54545e;")}>:{card.port}</span></div>
+                            {card.tags.length > 0 && (
                             <div style={css("display:flex;flex-wrap:wrap;gap:5px;")}>
                               {card.tags.map((t, ti) => (
                                 <span key={ti} style={css("font-size:10px;color:#8b8b95;background:#15151b;border-radius:5px;padding:2px 7px;")}>#{t.name}</span>
                               ))}
                             </div>
-                            <div style={css("display:flex;align-items:center;gap:6px;margin-top:1px;")}>
+                            )}
+                            <div style={css("display:flex;align-items:center;gap:6px;margin-top:2px;")}>
                               <span style={css("font-size:10px;color:#54545e;")}>last used {card.lastUsed}</span>
                               <span style={css("flex:1;")}></span>
                               <span style={css("font-size:10.5px;color:#ff7a59;font-weight:600;")}>Connect →</span>
