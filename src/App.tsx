@@ -1120,10 +1120,63 @@ export default class App extends React.Component<any, any> {
     this.setState({ ioPrompt: { mode: 'import', value: '', path } });
   }
   ioCancel = () => this.setState({ ioPrompt: null });
+  // Export a single connection (host + its secret), with an OPTIONAL password.
+  async exportHost(host) {
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'Export', msg: 'Available in the desktop app.' }); return; }
+    this.setState({ ioPrompt: { mode: 'export1', value: '', hostId: host.id, hostName: host.name, optional: true } });
+  }
+  async importHostFile() {
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'Import', msg: 'Available in the desktop app.' }); return; }
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const path = await open({ multiple: false, filters: [{ name: 'SSH Ache connection', extensions: ['json'] }] });
+    if (!path || typeof path !== 'string') return;
+    this.setState({ ioPrompt: { mode: 'import1', value: '', path, optional: true } });
+  }
+  _importOneHost(host, secret) {
+    if (!host) return;
+    const id = this.genId();
+    const h = { ...host, id, online: true, lastUsed: 'never' };
+    this.setState((s) => ({ hosts: [...s.hosts, h], view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], newHostId: id }));
+    if (secret) secretSet(id, secret);
+    setTimeout(() => this.setState((s) => (s.newHostId === id ? { newHostId: null } : {})), 2200);
+  }
   async ioSubmit() {
     const io = this.state.ioPrompt;
-    if (!io || !io.value) { this.pushToast({ type: 'err', title: 'Password required', msg: 'Enter a password.' }); return; }
+    if (!io) return;
+    if (!io.optional && !io.value) { this.pushToast({ type: 'err', title: 'Password required', msg: 'Enter a password.' }); return; }
     this.setState({ ioPrompt: null });
+    if (io.mode === 'export1') {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const host = this.state.hosts.find((h) => h.id === io.hostId);
+      if (!host) return;
+      const path = await save({ defaultPath: (host.name || 'connection') + '.sshache.json', filters: [{ name: 'SSH Ache connection', extensions: ['json'] }] });
+      if (!path) return;
+      try {
+        const secret = await secretGet(host.id);
+        const inner = { kind: 'ssh-ache-connection', host, secret: secret || null };
+        const data = io.value ? await encryptJson(inner, io.value) : JSON.stringify({ kind: 'ssh-ache-connection-plain', host, secret: secret || null });
+        await invoke('write_file', { path, data });
+        this.pushToast({ type: 'ok', title: io.value ? 'Connection exported (encrypted)' : 'Connection exported', msg: host.name });
+      } catch (e) {
+        this.pushToast({ type: 'err', title: 'Export failed', msg: String(e) });
+      }
+      return;
+    }
+    if (io.mode === 'import1') {
+      try {
+        const raw = await invoke('read_file', { path: io.path });
+        let parsed = null; try { parsed = JSON.parse(raw); } catch (_) {}
+        let bundle;
+        if (parsed && parsed.kind === 'ssh-ache-connection-plain') bundle = parsed;
+        else bundle = await decryptJson(raw, io.value);
+        if (!bundle || !bundle.host) throw new Error('invalid');
+        this._importOneHost(bundle.host, bundle.secret);
+        this.pushToast({ type: 'ok', title: 'Connection imported', msg: (bundle.host.name || '') });
+      } catch (e) {
+        this.pushToast({ type: 'err', title: 'Import failed', msg: 'Wrong password or invalid file.' });
+      }
+      return;
+    }
     if (io.mode === 'export') {
       const { save } = await import('@tauri-apps/plugin-dialog');
       const path = await save({ defaultPath: 'ssh-ache-backup.json', filters: [{ name: 'SSH Ache backup', extensions: ['json'] }] });
@@ -1333,9 +1386,10 @@ export default class App extends React.Component<any, any> {
         onClosed: () => this.handlePaneClosed(tab, p.id),
         onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
         boxStyle: { position:'relative', flexGrow:flex, flexShrink:1, flexBasis:0, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(255,122,89,.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.12)' : 'none', transition:'border-color .15s ease' },
-        gutterStyle: tlayout === 'row'
-          ? { position:'absolute', left:'-5px', top:0, width:'10px', height:'100%', cursor:'col-resize', zIndex:5 }
-          : { position:'absolute', top:'-5px', left:0, height:'10px', width:'100%', cursor:'row-resize', zIndex:5 },
+        resizerStyle: tlayout === 'row'
+          ? { flex:'none', alignSelf:'stretch', width:'10px', cursor:'col-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 }
+          : { flex:'none', alignSelf:'stretch', height:'10px', cursor:'row-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 },
+        resizerBar: tlayout === 'row' ? { width:'2px', height:'34px' } : { height:'2px', width:'34px' },
         headStyle: { display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px', borderBottom:'1px solid ' + (active ? 'rgba(255,122,89,.16)' : '#16161c'), background:'rgba(0,0,0,.2)', flex:'none' },
         termStyle: { flex:1, overflow:'auto', padding:'10px 13px 13px', color:theme.fg, caretColor:theme.accent, fontSize:s.settings.fontSize + 'px', lineHeight:'1.55', background:theme.bg },
         lines: (p.lines || []).map(l => ({ display: (l.x === '' ? ' ' : l.x), color: lineColor(l.t) })),
@@ -1353,7 +1407,7 @@ export default class App extends React.Component<any, any> {
     const tabPanes = s.tabs.map(t => ({
       id: t.id, active: t.id === s.activeTabId,
       wrapStyle: t.id === s.activeTabId
-        ? { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: t.layout === 'row' ? 'row' : 'column', gap:'8px' }
+        ? { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: t.layout === 'row' ? 'row' : 'column', gap:'2px' }
         : { display:'none' },
       panes: mkPanes(t),
     }));
@@ -1545,6 +1599,7 @@ export default class App extends React.Component<any, any> {
         onConnect: () => this.connectHost(h),
         onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
+        onExport: (e) => { e.stopPropagation(); this.exportHost(h); },
         favorite: !!h.favorite,
         onToggleFav: (e) => { e.stopPropagation(); this.toggleHostFav(h.id); },
       };
@@ -1748,6 +1803,7 @@ export default class App extends React.Component<any, any> {
       approve: () => this.mcpRespond(true), deny: () => this.mcpRespond(false),
       onExport: () => this.exportConfig(),
       onImport: () => this.importConfig(),
+      onImportOne: () => this.importHostFile(),
       clearConfirmOpen: s.clearConfirm,
       openClearConfirm: () => this.setState({ clearConfirm: true }),
       cancelClearConfirm: () => this.setState({ clearConfirm: false }),
@@ -1758,10 +1814,10 @@ export default class App extends React.Component<any, any> {
       doCheckUpdate: () => this.checkUpdate(true),
       doDownloadUpdate: () => this.downloadUpdate(),
       ioOpen: !!s.ioPrompt,
-      ioTitle: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'Export — encrypt with a password' : 'Import — enter the password') : '',
+      ioTitle: s.ioPrompt ? ({ export: 'Export — encrypt with a password', export1: 'Export connection — optional password', import1: 'Import connection', import: 'Import — enter the password' }[s.ioPrompt.mode] || 'Import') : '',
       ioLabel: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'New password' : 'Password') : '',
-      ioHint: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.' : 'Enter the password used when this file was exported.') : '',
-      ioCta: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'Choose file & export' : 'Import') : '',
+      ioHint: s.ioPrompt ? ({ export: 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.', export1: 'Leave blank to export as plain JSON. With a password, the file (connection + its secret) is AES-256-GCM encrypted.', import1: 'Enter the password only if this connection file was exported with one — otherwise leave it blank.', import: 'Enter the password used when this file was exported.' }[s.ioPrompt.mode] || '') : '',
+      ioCta: s.ioPrompt ? ({ export: 'Choose file & export', export1: 'Choose file & export', import1: 'Import connection', import: 'Import' }[s.ioPrompt.mode] || 'Import') : '',
       ioValue: s.ioPrompt ? s.ioPrompt.value : '',
       onIoInput: (e) => this.setState(st => ({ ioPrompt: st.ioPrompt ? { ...st.ioPrompt, value: e.target.value } : null })),
       onIoKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.ioSubmit(); } },
@@ -1925,6 +1981,7 @@ export default class App extends React.Component<any, any> {
                               <span style={css("flex:1;font-size:13.5px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
                               <Hov onClick={card.onToggleFav} title="Favorite" s={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#6a6a74', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
                               <Hov onClick={card.onCopy} title="Copy ssh command" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⧉</Hov>
+                              <Hov onClick={card.onExport} title="Export connection" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:12px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⤓</Hov>
                               <Hov onClick={card.onEdit} title="Edit connection" s="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#6a6a74;border:1px solid #20202a;border-radius:6px;font-size:11px;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
                               <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;")}>{card.authIcon} {card.authLabel}</span>
                             </div>
@@ -1984,8 +2041,9 @@ export default class App extends React.Component<any, any> {
                   {v.tabPanes.map((tp) => (
                   <div key={tp.id} ref={tp.active ? v.paneWrapRef : null} style={tp.wrapStyle}>
                     {tp.panes.map((pane) => (
-                      <div key={pane.id} onMouseDown={pane.onActivate} style={pane.boxStyle}>
-                        {pane.notFirst && (<div onMouseDown={pane.onGutterDown} style={pane.gutterStyle}></div>)}
+                      <React.Fragment key={pane.id}>
+                      {pane.notFirst && (<div className="aca-resizer" onMouseDown={pane.onGutterDown} style={pane.resizerStyle}><span className="aca-rzbar" style={pane.resizerBar}></span></div>)}
+                      <div onMouseDown={pane.onActivate} style={pane.boxStyle}>
                         <div style={pane.headStyle}>
                           <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:#ff7a59;flex:none;")}></span>
                           <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.hostLabel}</span>
@@ -2007,6 +2065,7 @@ export default class App extends React.Component<any, any> {
                         </div>
                         )}
                       </div>
+                      </React.Fragment>
                     ))}
                   </div>
                   ))}
@@ -2414,7 +2473,8 @@ export default class App extends React.Component<any, any> {
                   <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;")}>
                     <span style={css("width:7px;height:7px;border-radius:50%;background:#46d9a0;box-shadow:0 0 7px rgba(70,217,160,.6);flex:none;")}></span>
                     <span style={css("flex:1;font-size:11.5px;color:#9a9aa3;")}>Stored on this device, encrypted at rest</span>
-                    <Hov as="button" onClick={v.onImport} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Import</Hov>
+                    <Hov as="button" onClick={v.onImportOne} title="Import a single connection file" s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;" h="background:#16161c;color:#ededf0;">Import connection</Hov>
+                    <Hov as="button" onClick={v.onImport} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;" h="background:#16161c;color:#ededf0;">Import</Hov>
                     <Hov as="button" onClick={v.onExport} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Export</Hov>
                   </div>
                 </div>
