@@ -32,9 +32,7 @@
   <meta name="twitter:image" content="https://sshache.com/assets/og-image.png" />
 
   <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preload" href="assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin />
 
   <link rel="stylesheet" href="style.css" />
 
@@ -47,7 +45,7 @@
     "operatingSystem": "macOS, Windows, Linux",
     "url": "https://sshache.com/",
     "downloadUrl": "https://github.com/TanvirMahin24/sshache/releases",
-    "softwareVersion": "0.1.0",
+    "softwareVersion": "0.1.4",
     "description": "A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, port forwarding, and an approval-gated AI agent bridge. Secrets live in the OS keychain and your data is encrypted at rest.",
     "image": "https://sshache.com/assets/og-image.png",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -60,7 +58,7 @@
   <!-- ===================== Nav ===================== -->
   <header class="nav">
     <div class="container nav-inner">
-      <a class="brand" href="index.html" aria-label="SSH Ache home">
+      <a class="brand" href="/" aria-label="SSH Ache home">
         <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
         <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
       </a>
@@ -73,7 +71,7 @@
         <a href="#features">Features</a>
         <a href="#security">Security</a>
         <a href="#install">Install</a>
-        <a href="docs.html">Docs</a>
+        <a href="/docs">Docs</a>
         <a href="https://github.com/TanvirMahin24/sshache" target="_blank" rel="noopener">GitHub</a>
         <a class="nav-cta" href="#install">Download</a>
       </nav>
@@ -84,7 +82,7 @@
     <!-- ===================== Hero ===================== -->
     <section class="hero">
       <div class="container">
-        <img class="wordmark" src="assets/logo-wordmark.svg" alt="SSH Ache" />
+        <img class="wordmark" src="assets/logo-wordmark.svg" alt="SSH Ache" width="400" height="100" fetchpriority="high" />
         <h1>The desktop SSH client that<br /><span class="gradient-text">keeps your data home.</span></h1>
         <p class="lead">
           A desktop SSH client with a clean terminal UI — connections, SFTP, port
@@ -293,7 +291,7 @@
 
           <p class="install-foot">
             All builds live on the <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">GitHub Releases page</a>.
-            Prefer to build it yourself? See the <a href="docs.html#install">docs</a>.
+            Prefer to build it yourself? See the <a href="/docs#install">docs</a>.
           </p>
         </div>
       </div>
@@ -350,7 +348,7 @@
     <div class="container">
       <div class="footer-top">
         <div class="footer-about">
-          <a class="brand" href="index.html" aria-label="SSH Ache home">
+          <a class="brand" href="/" aria-label="SSH Ache home">
             <img src="assets/logo-mark.svg" alt="" width="30" height="30" />
             <span><span class="brand-ssh">SSH</span><span class="brand-ache"> Ache</span></span>
           </a>
@@ -364,7 +362,7 @@
             <a href="#features">Features</a>
             <a href="#security">Security</a>
             <a href="#install">Install</a>
-            <a href="docs.html">Documentation</a>
+            <a href="/docs">Documentation</a>
           </div>
           <div class="footer-col">
             <h4>Project</h4>
