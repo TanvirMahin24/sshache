@@ -283,6 +283,14 @@
             </a>
           </div>
 
+          <div class="gk-note">
+            <span class="gk-ic" aria-hidden="true">⚠️</span>
+            <div>
+              <strong>macOS will block the first launch.</strong> It says SSH&nbsp;Ache is from an “unidentified developer” — because there's no $99/yr Apple Developer account behind it yet, not because anything's wrong.
+              <button class="gk-link" id="gkOpen" type="button">How to open it anyway →</button>
+            </div>
+          </div>
+
           <p class="install-foot">
             All builds live on the <a href="https://github.com/TanvirMahin24/sshache/releases" target="_blank" rel="noopener">GitHub Releases page</a>.
             Prefer to build it yourself? See the <a href="docs.html#install">docs</a>.
@@ -291,6 +299,51 @@
       </div>
     </section>
   </main>
+
+  <!-- ===================== Gatekeeper modal ===================== -->
+  <div class="modal-overlay" id="gkModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="gkTitle">
+      <button class="modal-x" id="gkClose" type="button" aria-label="Close">×</button>
+      <div class="modal-badge" aria-hidden="true">🍎</div>
+      <h3 id="gkTitle">Opening SSH&nbsp;Ache on macOS</h3>
+      <p>SSH&nbsp;Ache isn't notarized yet, so on the first launch macOS shows
+        <em>“Apple could not verify SSH Ache is free of malware.”</em> Use either method below — you only do this once.</p>
+
+      <div class="gk-method">
+        <span class="gk-num">1</span>
+        <div>
+          <strong>Right-click → Open</strong>
+          <p>In <code>Applications</code>, <strong>right-click</strong> (or Control-click) <strong>SSH Ache</strong> → <strong>Open</strong> → click <strong>Open</strong> in the dialog.</p>
+        </div>
+      </div>
+
+      <div class="gk-method">
+        <span class="gk-num">2</span>
+        <div>
+          <strong>System Settings (macOS 15+)</strong>
+          <p>Try to open the app once, then go to <strong>System&nbsp;Settings → Privacy&nbsp;&amp;&nbsp;Security</strong>, scroll down to <em>“SSH Ache was blocked”</em> and click <strong>Open Anyway</strong>.</p>
+        </div>
+      </div>
+
+      <div class="gk-method">
+        <span class="gk-num">3</span>
+        <div>
+          <strong>Terminal (one command)</strong>
+          <p>Strip the quarantine flag, then open it normally:</p>
+          <div class="gk-term">
+            <code id="gkCmd">xattr -dr com.apple.quarantine "/Applications/SSH Ache.app"</code>
+            <button class="copy-btn" id="gkCopy" type="button" data-copy='xattr -dr com.apple.quarantine "/Applications/SSH Ache.app"'>Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="gk-coffee">
+        Yes, all this because Apple wants <strong>$99/year</strong> to say a free app is fine. Feeling generous?
+        <a href="https://www.patreon.com/cw/tanvirmahin24" target="_blank" rel="noopener">Buy me a coffee ☕</a> —
+        enough caffeine and we'll fund the developer account, sign &amp; notarize it, and your Mac will finally stop side-eyeing it. 😉
+      </p>
+    </div>
+  </div>
 
   <!-- ===================== Footer ===================== -->
   <footer class="footer">
@@ -367,6 +420,26 @@
             btn.textContent = prev;
             btn.classList.remove('copied');
           }, 1600);
+        });
+      });
+    })();
+
+    // Gatekeeper modal + its copy button
+    (function () {
+      var modal = document.getElementById('gkModal');
+      var open = document.getElementById('gkOpen');
+      var close = document.getElementById('gkClose');
+      var copy = document.getElementById('gkCopy');
+      function show() { if (modal) { modal.hidden = false; document.body.style.overflow = 'hidden'; } }
+      function hide() { if (modal) { modal.hidden = true; document.body.style.overflow = ''; } }
+      if (open) open.addEventListener('click', show);
+      if (close) close.addEventListener('click', hide);
+      if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) hide(); });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modal && !modal.hidden) hide(); });
+      if (copy) copy.addEventListener('click', function () {
+        navigator.clipboard.writeText(copy.getAttribute('data-copy')).then(function () {
+          var prev = copy.textContent; copy.textContent = 'Copied!'; copy.classList.add('copied');
+          setTimeout(function () { copy.textContent = prev; copy.classList.remove('copied'); }, 1600);
         });
       });
     })();
