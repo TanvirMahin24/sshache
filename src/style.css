@@ -141,6 +141,16 @@ body {
     animation: none;
   }
 }
+/* Connection-card actions reveal on hover (keeps the name full-width). */
+.aca-card .aca-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+.aca-card:hover .aca-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
 /* Draggable divider between split panes. */
 .aca-rzbar {
   background: var(--border2);
