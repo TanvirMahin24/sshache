@@ -12,6 +12,7 @@
 import * as React from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import logoMark from "./assets/logo-mark.svg";
@@ -20,7 +21,60 @@ type S = React.CSSProperties;
 
 // Parse a design-style inline CSS string ("a:b;c:d") into a React style object,
 // so the prototype's literal style strings port across with no hand-conversion.
+// ---- whole-app theming -------------------------------------------------
+// The design hard-codes chrome colours as hex in every style string. We map
+// those families to CSS variables here and set the variables per active theme,
+// so changing the theme repaints the entire UI (not just the terminal). The
+// THEMES palette data never passes through css(), so it is untouched.
+const _hx = (h: string) => { h = h.replace("#", ""); if (h.length === 3) h = h.split("").map((c) => c + c).join(""); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; };
+const _rx = (a: number[]) => "#" + a.map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join("");
+const _mix = (a: string, b: string, t: number) => { const A = _hx(a), B = _hx(b); return _rx([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]); };
+const lighten = (h: string, t: number) => _mix(h, "#ffffff", t);
+const darken = (h: string, t: number) => _mix(h, "#000000", t);
+const rgbStr = (h: string) => _hx(h).join(",");
+
+const COLORMAP: Record<string, string> = {
+  "#ededf0": "var(--text)", "#f2f2f5": "var(--text)",
+  "#b9b9c2": "var(--text2)", "#cfcfd6": "var(--text2)", "#dcdce2": "var(--text2)", "#c7c7cf": "var(--text2)",
+  "#9a9aa3": "var(--muted)", "#8b8b95": "var(--muted)", "#7e7e88": "var(--muted)",
+  "#6a6a74": "var(--dim)", "#5c5c66": "var(--dim)",
+  "#54545e": "var(--faint)", "#46464f": "var(--faint)",
+  "#09090b": "var(--bg)", "#0a0a0b": "var(--bg)", "#0a0a0d": "var(--bg)", "#0b0b0e": "var(--bg)",
+  "#0c0c10": "var(--surface)", "#0d0d11": "var(--surface)", "#0e0e12": "var(--surface)", "#0e0e13": "var(--surface)",
+  "#101015": "var(--surface2)", "#15151b": "var(--surface2)",
+  "#16161c": "var(--line)", "#18181f": "var(--line)",
+  "#1a1a20": "var(--border)", "#1c1c24": "var(--border)", "#1f1f27": "var(--border)", "#20202a": "var(--border)", "#23232c": "var(--border)",
+  "#26262e": "var(--border2)", "#2a2a33": "var(--border2)", "#2c2c36": "var(--border2)", "#3a3a44": "var(--border2)",
+  "#ff7a59": "var(--accent)", "#ff8d70": "var(--accent-hi)", "#0c0b0a": "var(--accent-ink)",
+};
+const _COLOR_RE = new RegExp(Object.keys(COLORMAP).join("|"), "g");
+const themeColors = (str: string) =>
+  str.replace(/rgba\(255,\s*122,\s*89,/g, "rgba(var(--accent-rgb),").replace(_COLOR_RE, (m) => COLORMAP[m]);
+
+const lum = (h: string) => { const [r, g, b] = _hx(h); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; };
+
+// Derive the CSS-variable set for a theme; applied to the app root in render().
+// Light themes invert the shade direction (surfaces darker than the page,
+// borders darker), and the accent's text colour is chosen by its luminance.
+const themeVars = (t: any): any => {
+  const base = t.bg, fg = t.fg, acc = t.accent;
+  const light = lum(base) > 0.5;
+  const ink = lum(acc) > 0.6 ? "#15110e" : "#ffffff";
+  // Text tiers always derive from the readable fg toward the bg, so contrast
+  // holds on both light and dark themes (no tier washes out).
+  const text2 = _mix(fg, base, 0.18), muted = _mix(fg, base, 0.34), dim = _mix(fg, base, 0.48), faint = _mix(fg, base, 0.58);
+  const shell = light
+    ? { "--bg": lighten(base, 0.04), "--surface": darken(base, 0.02), "--surface2": darken(base, 0.05), "--line": darken(base, 0.09), "--border": darken(base, 0.13), "--border2": darken(base, 0.22) }
+    : { "--bg": darken(base, 0.30), "--surface": base, "--surface2": lighten(base, 0.05), "--line": darken(base, 0.14), "--border": lighten(base, 0.10), "--border2": lighten(base, 0.17) };
+  return {
+    ...shell,
+    "--text": fg, "--text2": text2, "--muted": muted, "--dim": dim, "--faint": faint,
+    "--accent": acc, "--accent-hi": light ? darken(acc, 0.08) : lighten(acc, 0.12), "--accent-rgb": rgbStr(acc), "--accent-ink": ink,
+  };
+};
+
 const css = (str: string): S => {
+  str = themeColors(str);
   const o: any = {};
   for (const part of str.split(";")) {
     const seg = part.trim();
@@ -35,7 +89,10 @@ const css = (str: string): S => {
   }
   return o;
 };
-const norm = (x: string | S): S => (typeof x === "string" ? css(x) : x);
+// Style objects (built in renderVals with hardcoded hex) bypass css(), so remap
+// their string colour values too — keeps object-built styles themed.
+const _mapStyleObj = (o: any): S => { const r: any = {}; for (const k in o) { const val = o[k]; r[k] = typeof val === "string" ? themeColors(val) : val; } return r; };
+const norm = (x: string | S): S => (typeof x === "string" ? css(x) : _mapStyleObj(x));
 
 // Splitting an overridden `border` shorthand into longhands avoids React's
 // "mixing shorthand and non-shorthand" warning when a hover/focus overlay
@@ -64,6 +121,16 @@ const AUTHOR = {
   tip: "https://www.patreon.com/cw/tanvirmahin24",
   motto: "Don't be so busy making a living that you forget to actually make a life.",
 };
+
+// First-run guided tour (centered stepper, skippable). Persisted via `tourSeen`.
+const TOUR_STEPS = [
+  { icon: "❯_", title: "Welcome to SSH Ache", body: "A fast desktop SSH client — terminal, files, and tunnels in one place. Take the 30-second tour?" },
+  { icon: "+", title: "Save your connections", body: "Add hosts with “New host” (⌘N). Passwords and keys live in your OS keychain, never in plaintext." },
+  { icon: "›_", title: "Terminal & splits", body: "Open real SSH or local-shell tabs. Split a pane with ⌘D, and run anything from the ⌘K command palette." },
+  { icon: "⇅", title: "Move files over SFTP", body: "Press ⌘J for the SFTP panel, then drag files or whole folders between local and remote." },
+  { icon: "◐", title: "Theme everything", body: "Hit ⌘T to switch theme — it repaints the entire app and the terminal together, not just the colours." },
+  { icon: "♥", title: "Built by Noor Ajmir Tanvir", body: "That’s it! Add your first connection to begin. You can support the project any time from the ♥ menu." },
+];
 // Open a link in the OS browser. Tauri webview won't honour target=_blank, so
 // route through the open_url command there; plain window.open in the browser.
 const openExt = (url: string) => {
@@ -340,17 +407,15 @@ export default class App extends React.Component<any, any> {
     nord:      { name:'Nord',       author:'arctic',    downloads:'264k',  bg:'#2e3440', fg:'#e5e9f0', fgDim:'#9aa3b5', accent:'#88c0d0', sw:['#88c0d0','#81a1c1','#a3be8c','#b48ead','#bf616a'], ansi:['#3b4252','#bf616a','#a3be8c','#ebcb8b','#81a1c1','#b48ead','#88c0d0','#e5e9f0','#4c566a','#bf616a','#a3be8c','#ebcb8b','#81a1c1','#b48ead','#8fbcbb','#eceff4'] },
     dracula:   { name:'Dracula',    author:'zeno',      downloads:'289k',  bg:'#282a36', fg:'#f8f8f2', fgDim:'#9ea3c0', accent:'#bd93f9', sw:['#bd93f9','#ff79c6','#8be9fd','#50fa7b','#ff5555'], ansi:['#21222c','#ff5555','#50fa7b','#f1fa8c','#bd93f9','#ff79c6','#8be9fd','#f8f8f2','#6272a4','#ff6e6e','#69ff94','#ffffa5','#d6acff','#ff92df','#a4ffff','#ffffff'] },
     ayu:       { name:'Ayu Mirage', author:'dempfi',    downloads:'94.1k', bg:'#1f2430', fg:'#cbccc6', fgDim:'#8b8f9a', accent:'#ffcc66', sw:['#ffcc66','#ffd580','#bae67e','#5ccfe6','#f28779'], ansi:['#191e2a','#ed8274','#a6cc70','#fad07b','#6dcbfa','#cfbafa','#90e1c6','#c7c7c7','#686868','#f28779','#bae67e','#ffd580','#73d0ff','#d4bfff','#95e6cb','#ffffff'] },
-    rosepine:  { name:'Rosé Pine',  author:'rose-pine', downloads:'118k',  bg:'#191724', fg:'#e0def4', fgDim:'#908caa', accent:'#ebbcba', sw:['#ebbcba','#c4a7e7','#9ccfd8','#31748f','#eb6f92'], ansi:['#26233a','#eb6f92','#31748f','#f6c177','#9ccfd8','#c4a7e7','#ebbcba','#e0def4','#6e6a86','#eb6f92','#31748f','#f6c177','#9ccfd8','#c4a7e7','#ebbcba','#e0def4'] }
+    rosepine:  { name:'Rosé Pine',  author:'rose-pine', downloads:'118k',  bg:'#191724', fg:'#e0def4', fgDim:'#908caa', accent:'#ebbcba', sw:['#ebbcba','#c4a7e7','#9ccfd8','#31748f','#eb6f92'], ansi:['#26233a','#eb6f92','#31748f','#f6c177','#9ccfd8','#c4a7e7','#ebbcba','#e0def4','#6e6a86','#eb6f92','#31748f','#f6c177','#9ccfd8','#c4a7e7','#ebbcba','#e0def4'] },
+    onedark:   { name:'One Dark',   author:'atom',      downloads:'156k',  bg:'#282c34', fg:'#abb2bf', fgDim:'#828997', accent:'#61afef', sw:['#61afef','#c678dd','#56b6c2','#98c379','#e06c75'], ansi:['#282c34','#e06c75','#98c379','#e5c07b','#61afef','#c678dd','#56b6c2','#abb2bf','#5c6370','#e06c75','#98c379','#e5c07b','#61afef','#c678dd','#56b6c2','#ffffff'] },
+    monokai:   { name:'Monokai',    author:'wimer',     downloads:'203k',  bg:'#272822', fg:'#f8f8f2', fgDim:'#a59f85', accent:'#66d9ef', sw:['#66d9ef','#ae81ff','#a6e22e','#f4bf75','#f92672'], ansi:['#272822','#f92672','#a6e22e','#f4bf75','#66d9ef','#ae81ff','#a1efe4','#f8f8f2','#75715e','#f92672','#a6e22e','#f4bf75','#66d9ef','#ae81ff','#a1efe4','#f9f8f5'] },
+    solardark: { name:'Solarized Dark', author:'altercation', downloads:'241k', bg:'#002b36', fg:'#93a1a1', fgDim:'#586e75', accent:'#268bd2', sw:['#268bd2','#d33682','#2aa198','#859900','#dc322f'], ansi:['#073642','#dc322f','#859900','#b58900','#268bd2','#d33682','#2aa198','#eee8d5','#002b36','#cb4b16','#586e75','#657b83','#839496','#6c71c4','#93a1a1','#fdf6e3'] },
+    solarlight:{ name:'Solarized Light', author:'altercation', downloads:'198k', bg:'#fdf6e3', fg:'#586e75', fgDim:'#93a1a1', accent:'#268bd2', sw:['#268bd2','#d33682','#2aa198','#859900','#dc322f'], ansi:['#073642','#dc322f','#859900','#b58900','#268bd2','#d33682','#2aa198','#eee8d5','#002b36','#cb4b16','#586e75','#657b83','#839496','#6c71c4','#93a1a1','#fdf6e3'] },
+    ghlight:   { name:'GitHub Light', author:'github',  downloads:'312k',  bg:'#ffffff', fg:'#24292f', fgDim:'#6e7781', accent:'#0969da', sw:['#0969da','#8250df','#1a7f37','#bf8700','#cf222e'], ansi:['#24292e','#d73a49','#28a745','#dbab09','#0366d6','#5a32a3','#0598bc','#6a737d','#959da5','#cb2431','#22863a','#b08800','#005cc5','#5a32a3','#3192aa','#d1d5da'] },
+    latte:     { name:'Latte',      author:'catppuccin',downloads:'167k',  bg:'#eff1f5', fg:'#4c4f69', fgDim:'#6c6f85', accent:'#8839ef', sw:['#8839ef','#ea76cb','#179299','#40a02b','#d20f39'], ansi:['#5c5f77','#d20f39','#40a02b','#df8e1d','#1e66f5','#ea76cb','#179299','#acb0be','#6c6f85','#d20f39','#40a02b','#df8e1d','#1e66f5','#ea76cb','#179299','#bcc0cc'] },
+    dawn:      { name:'Rosé Pine Dawn', author:'rose-pine', downloads:'88.5k', bg:'#faf4ed', fg:'#575279', fgDim:'#797593', accent:'#d7827e', sw:['#d7827e','#907aa9','#56949f','#286983','#b4637a'], ansi:['#f2e9e1','#b4637a','#286983','#ea9d34','#56949f','#907aa9','#d7827e','#575279','#9893a5','#b4637a','#286983','#ea9d34','#56949f','#907aa9','#d7827e','#575279'] }
   };
-
-  SEED_HOSTS = [
-    { id:'h1', name:'production-web', user:'root',     addr:'10.0.4.21',         port:'22',   folder:'Production', tags:['web','nginx','prod'],   auth:'key',      online:true,  lastUsed:'2h ago'  },
-    { id:'h2', name:'db-primary',     user:'postgres', addr:'10.0.4.40',         port:'22',   folder:'Databases',  tags:['postgres','prod'],      auth:'key',      online:true,  lastUsed:'5h ago'  },
-    { id:'h3', name:'edge-cache',     user:'deploy',   addr:'192.168.1.8',       port:'2222', folder:'Edge',       tags:['redis','cache'],        auth:'password', online:false, lastUsed:'3d ago'  },
-    { id:'h4', name:'staging',        user:'ubuntu',   addr:'staging.internal',  port:'22',   folder:'Production', tags:['web','staging'],        auth:'key',      online:true,  lastUsed:'1d ago', fail:true },
-    { id:'h5', name:'raspberrypi',    user:'pi',       addr:'raspberrypi.local', port:'22',   folder:'Personal',   tags:['iot','arm'],            auth:'password', online:true,  lastUsed:'1w ago'  },
-    { id:'h6', name:'backup-nas',     user:'admin',    addr:'192.168.1.20',      port:'22',   folder:'Personal',   tags:['storage','smb'],        auth:'password', online:false, lastUsed:'never'   }
-  ];
 
   state = {
     sidebarOpen: true,
@@ -360,6 +425,11 @@ export default class App extends React.Component<any, any> {
     aboutOpen: false,
     paletteQuery: '',
     themeId: 'ember',
+    tourSeen: false,
+    tourStep: 0,
+    appVersion: '0.0.0',
+    update: null,        // null | { version, url, asset }
+    updateChecking: false,
     view: 'dashboard',
     search: '',
     activeFolder: 'all',
@@ -368,7 +438,7 @@ export default class App extends React.Component<any, any> {
     settingsOpen: false,
     editingId: null,
     newHostId: null,
-    hosts: this.SEED_HOSTS,
+    hosts: [],
     form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', tagInput:'', tags:[] },
     settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false },
     activeTabId: 't1',
@@ -377,6 +447,7 @@ export default class App extends React.Component<any, any> {
     secretPrompt: null,
     hostKeyPrompt: null,
     confirmClose: null,
+    clearConfirm: false,
     ioPrompt: null,
     locked: false,
     lockPrompt: null,
@@ -406,16 +477,8 @@ export default class App extends React.Component<any, any> {
     selLocal: [],
     selRemote: [],
     tabs: [
-      { id:'t1', title:'production-web', host:'production-web', user:'root', addr:'10.0.4.21', layout:'row', sizes:[100], panes:[
-        { id:'p1', user:'root', host:'production-web', cwd:'~', input:'', lines:[
-          { t:'sys', x:'SSH Ache 0.4.0 · terminal session' },
-          { t:'ok',  x:'● secure channel established · root@10.0.4.21 (production-web)' },
-          { t:'cmd', x:'❯ uptime' },
-          { t:'out', x:' 14:22:07 up 37 days,  load average: 0.18, 0.22, 0.20' },
-          { t:'cmd', x:'❯ ls' },
-          { t:'out', x:'src   assets   Cargo.toml   README.md   build.rs' },
-          { t:'dim', x:'type `help` for commands · ⌘K palette · ⌘T themes · ⌘D split' }
-        ] }
+      { id:'t1', title:'localhost', host:'localhost', user:'you', addr:'shell', layout:'row', sizes:[100], panes:[
+        { id:'p1', live:true, kind:'local', sessionId:'p1', host:{ addr:'localhost', user:'you' }, user:'you', hostName:'localhost', cwd:'~', input:'', lines:[] }
       ] }
     ]
   };
@@ -442,6 +505,7 @@ export default class App extends React.Component<any, any> {
       themeId: this.THEMES[d.themeId] ? d.themeId : base.themeId,
       sidebarOpen: typeof d.sidebarOpen === 'boolean' ? d.sidebarOpen : base.sidebarOpen,
       folderMeta: (d.folderMeta && typeof d.folderMeta === 'object') ? d.folderMeta : base.folderMeta,
+      tourSeen: typeof d.tourSeen === 'boolean' ? d.tourSeen : base.tourSeen,
     };
   }
 
@@ -460,6 +524,10 @@ export default class App extends React.Component<any, any> {
       else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false }); }
     };
     window.addEventListener('keydown', this._key);
+    // Resolve the real app version, then auto-check for a newer release once.
+    if (isTauri) {
+      getVersion().then((vsn) => { this.setState({ appVersion: vsn }, () => this.checkUpdate(false)); }).catch(() => {});
+    }
     // Authoritative load from the on-disk store (Tauri); redundant in browser.
     loadCfg('state').then(raw => {
       if (!raw) return;
@@ -544,6 +612,54 @@ export default class App extends React.Component<any, any> {
     this.pushToast({ type: 'info', title: 'Port forwards stopped', msg: n ? `${n} closed` : 'none active' });
   };
 
+  // Wipe every saved connection, setting, and keychain secret, then reload.
+  clearAllData = async () => {
+    this.setState({ clearConfirm: false });
+    if (isTauri) { for (const h of this.state.hosts) { try { await invoke('secret_delete', { id: h.id }); } catch (_) {} } }
+    try { await saveCfg('state', JSON.stringify({ tourSeen: true })); } catch (_) {}
+    this.pushToast({ type: 'ok', title: 'All data cleared', msg: 'Reloading…' });
+    setTimeout(() => { try { (window as any).location.reload(); } catch (_) {} }, 400);
+  };
+
+  // ---- updates: compare the running version to the latest GitHub release ----
+  _semverGt(a, b) {
+    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < 3; i++) { if ((pa[i] || 0) > (pb[i] || 0)) return true; if ((pa[i] || 0) < (pb[i] || 0)) return false; }
+    return false;
+  }
+  _pickAsset(assets) {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    let ext = null;
+    if (/Mac/i.test(ua)) ext = '.dmg';
+    else if (/Win/i.test(ua)) ext = '.msi';
+    else if (/Linux/i.test(ua)) ext = '.AppImage';
+    const a = ext && (assets || []).find((x) => (x.name || '').endsWith(ext));
+    return a ? a.browser_download_url : null;
+  }
+  checkUpdate = async (manual) => {
+    if (this.state.updateChecking) return;
+    this.setState({ updateChecking: true });
+    try {
+      const res = await fetch('https://api.github.com/repos/TanvirMahin24/sshache/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
+      const latest = String(j.tag_name || '').replace(/^v/, '');
+      const cur = this.state.appVersion;
+      if (latest && this._semverGt(latest, cur)) {
+        this.setState({ update: { version: latest, url: j.html_url, asset: this._pickAsset(j.assets) } });
+        if (manual) this.pushToast({ type: 'ok', title: 'Update available', msg: 'v' + latest });
+      } else {
+        this.setState({ update: null });
+        if (manual) this.pushToast({ type: 'info', title: "You're up to date", msg: 'v' + cur });
+      }
+    } catch (e) {
+      if (manual) this.pushToast({ type: 'err', title: 'Update check failed', msg: String(e) });
+    }
+    this.setState({ updateChecking: false });
+  };
+  downloadUpdate = () => { const u = this.state.update; if (u) openExt(u.asset || u.url); };
+
   // ---- MCP server (local agent access) ----
   ensureMcpToken() {
     let t = this.state.settings.mcpToken;
@@ -576,13 +692,13 @@ export default class App extends React.Component<any, any> {
       this.paletteRef.current.focus();
     }
     const openHosts = (st) => Array.from(new Set(st.tabs.flatMap(t => t.panes.filter(p => p.live).map(p => p.host && p.host.id)).filter(Boolean)));
-    const keys = ['hosts', 'settings', 'themeId', 'sidebarOpen', 'folderMeta'];
+    const keys = ['hosts', 'settings', 'themeId', 'sidebarOpen', 'folderMeta', 'tourSeen'];
     const cur = openHosts(this.state);
     if (keys.some(k => this.state[k] !== prevState[k]) || JSON.stringify(cur) !== JSON.stringify(openHosts(prevState))) {
       saveCfg('state', JSON.stringify({
         hosts: this.state.hosts, settings: this.state.settings,
         themeId: this.state.themeId, sidebarOpen: this.state.sidebarOpen,
-        folderMeta: this.state.folderMeta, openHosts: cur,
+        folderMeta: this.state.folderMeta, tourSeen: this.state.tourSeen, openHosts: cur,
       }));
     }
   }
@@ -1460,6 +1576,12 @@ export default class App extends React.Component<any, any> {
     const themeOptions = Object.keys(this.THEMES).map(id => { const th = this.THEMES[id]; const on = id === s.themeId; return { id, name: th.name, active: on, dotStyle: { width:'12px', height:'12px', borderRadius:'4px', background: th.accent, flex:'none' }, style: { display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px', borderRadius:'7px', cursor:'pointer', fontSize:'12px', color: on ? '#ededf0' : '#9a9aa3', background: on ? '#15151b' : '#0e0e12', border:'1px solid ' + (on ? 'rgba(255,122,89,.4)' : '#1c1c24') }, onPick: () => { this.setState({ themeId: id }); } }; });
 
     return {
+      themeVars: themeVars(theme),
+      noHosts: s.hosts.length === 0,
+      tourSeen: s.tourSeen, tourStep: s.tourStep,
+      tourNext: () => this.setState((st) => ({ tourStep: st.tourStep + 1 })),
+      tourBack: () => this.setState((st) => ({ tourStep: Math.max(0, st.tourStep - 1) })),
+      tourDone: () => this.setState({ tourSeen: true, tourStep: 0 }),
       sidebarOpen: s.sidebarOpen, sftpOpen: s.sftpOpen, paletteOpen: s.paletteOpen, themesOpen: s.themesOpen,
       paletteQuery: s.paletteQuery, paletteRef: this.paletteRef, paletteItems,
       tabs, panes, tabPanes, paneWrapRef: this.paneWrap,
@@ -1626,6 +1748,15 @@ export default class App extends React.Component<any, any> {
       approve: () => this.mcpRespond(true), deny: () => this.mcpRespond(false),
       onExport: () => this.exportConfig(),
       onImport: () => this.importConfig(),
+      clearConfirmOpen: s.clearConfirm,
+      openClearConfirm: () => this.setState({ clearConfirm: true }),
+      cancelClearConfirm: () => this.setState({ clearConfirm: false }),
+      doClearAll: () => this.clearAllData(),
+      appVersion: s.appVersion,
+      updateInfo: s.update,
+      updateChecking: s.updateChecking,
+      doCheckUpdate: () => this.checkUpdate(true),
+      doDownloadUpdate: () => this.downloadUpdate(),
       ioOpen: !!s.ioPrompt,
       ioTitle: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'Export — encrypt with a password' : 'Import — enter the password') : '',
       ioLabel: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'New password' : 'Password') : '',
@@ -1643,14 +1774,15 @@ export default class App extends React.Component<any, any> {
   render() {
     const v = this.renderVals();
     return (
-      <div style={css("position:relative;height:100vh;width:100%;display:flex;flex-direction:column;background:#09090b;color:#ededf0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;overflow:hidden;")}>
+      <div style={{ ...css("position:relative;height:100vh;width:100%;display:flex;flex-direction:column;background:#09090b;color:#ededf0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;overflow:hidden;"), ...v.themeVars }}>
 
         {/* TITLE BAR */}
         <div data-tauri-drag-region style={css("height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;background:#0a0a0d;border-bottom:1px solid #16161c;")}>
           <div style={css("display:flex;align-items:center;gap:9px;")}>
             <img src={logoMark} width="20" height="20" alt="SSH Ache" style={{ borderRadius: "6px", boxShadow: "0 0 12px rgba(255,77,112,.45)" }} />
             <span style={css("font-weight:700;font-size:13px;letter-spacing:.01em;color:#f2f2f5;")}>SSH&nbsp;Ache</span>
-            <span style={css("font-size:10px;color:#6a6a74;border:1px solid #26262e;border-radius:4px;padding:1px 5px;")}>v0.4.0</span>
+            <span style={css("font-size:10px;color:#6a6a74;border:1px solid #26262e;border-radius:4px;padding:1px 5px;")}>v{v.appVersion}</span>
+            {v.updateInfo && (<Hov onClick={v.doDownloadUpdate} title={"Download v" + v.updateInfo.version} s="font-size:10px;color:#0c0b0a;background:#ff7a59;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:600;" h="background:#ff8d70;">↑ Update</Hov>)}
           </div>
           <span data-tauri-drag-region style={css("flex:1;")}></span>
           <div style={css("display:flex;align-items:center;gap:7px;")}>
@@ -1718,10 +1850,6 @@ export default class App extends React.Component<any, any> {
                 <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;justify-content:center;gap:7px;padding:9px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">
                   <span style={css("font-size:14px;")}>+</span><span>Add host</span>
                 </Hov>
-                <div style={css("display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:10px;color:#54545e;")}>
-                  <span style={css("width:6px;height:6px;border-radius:50%;background:#46d9a0;box-shadow:0 0 6px rgba(70,217,160,.6);")}></span>
-                  <span>encrypted at rest</span>
-                </div>
                 <div style={css("display:flex;gap:7px;")}>
                   <Hov as="button" onClick={v.openThemes} s="flex:1;padding:7px 8px;background:#101015;border:1px solid #20202a;border-radius:6px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Themes</Hov>
                   <Hov as="button" onClick={v.openSettings} s="flex:1;padding:7px 8px;background:#101015;border:1px solid #20202a;border-radius:6px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Settings</Hov>
@@ -1734,7 +1862,29 @@ export default class App extends React.Component<any, any> {
           <div style={css("flex:1;min-width:0;display:flex;flex-direction:column;")}>
 
             {/* DASHBOARD */}
-            {v.isDashboard && (
+            {v.isDashboard && (v.noHosts ? (
+              <div style={css("flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:auto;padding:48px 24px;text-align:center;")}>
+                <img src={logoMark} width="84" height="84" alt="SSH Ache" className="aca-float" style={{ borderRadius: '24px', boxShadow: '0 0 42px rgba(var(--accent-rgb),.35)' }} />
+                <div style={{ ...css("font-size:30px;font-weight:700;margin-top:22px;letter-spacing:-.02em;"), background: 'linear-gradient(120deg,var(--accent-hi),var(--accent))', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Welcome to SSH&nbsp;Ache</div>
+                <div style={css("font-size:13px;color:#9a9aa3;margin-top:11px;max-width:460px;line-height:1.65;")}>No connections yet. Add your first server to get started — a fast, secure terminal with SFTP and port forwarding, all on your machine.</div>
+                <Hov as="button" onClick={v.openAddHost} s="margin-top:26px;display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(255,122,89,.28);" h="background:#ff8d70;">
+                  <span style={css("font-size:16px;")}>+</span><span>Add your first connection</span>
+                </Hov>
+                <div style={css("display:flex;flex-wrap:wrap;justify-content:center;gap:9px;margin-top:28px;")}>
+                  {[['⌘K', 'Command palette'], ['⌘T', 'Switch theme'], ['⌘J', 'SFTP files'], ['⌘D', 'Split panes']].map((t, i) => (
+                    <span key={i} style={css("display:flex;align-items:center;gap:7px;font-size:11px;color:#9a9aa3;background:#0e0e12;border:1px solid #20202a;border-radius:20px;padding:6px 13px;")}><span style={css("color:#ff7a59;font-weight:700;")}>{t[0]}</span>{t[1]}</span>
+                  ))}
+                </div>
+                <div style={css("margin-top:34px;display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:10px;font-size:11px;color:#54545e;")}>
+                  <span>Crafted by</span>
+                  <span onClick={() => v.openExt(v.author.site)} style={css("color:#9a9aa3;cursor:pointer;")}>{v.author.name}</span>
+                  <span style={css("color:#26262e;")}>·</span>
+                  <span onClick={() => v.openExt(v.author.github)} style={css("color:#9a9aa3;cursor:pointer;")}>GitHub</span>
+                  <span style={css("color:#26262e;")}>·</span>
+                  <span onClick={() => v.openExt(v.author.tip)} style={css("color:#ff7a59;cursor:pointer;")}>Buy me a coffee ☕</span>
+                </div>
+              </div>
+            ) : (
               <div style={css("flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;")}>
                 <div style={css("flex:none;padding:22px 26px 14px;display:flex;align-items:flex-end;gap:14px;")}>
                   <div>
@@ -1803,7 +1953,7 @@ export default class App extends React.Component<any, any> {
                   )}
                 </div>
               </div>
-            )}
+            ))}
 
             {/* TERMINAL WORKSPACE */}
             {v.isWorkspace && (
@@ -2023,11 +2173,34 @@ export default class App extends React.Component<any, any> {
                   <Hov as="button" onClick={() => v.openExt(v.author.site)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Website</Hov>
                 </div>
                 <Hov as="button" onClick={() => v.openExt(v.author.tip)} s="margin-top:11px;width:100%;padding:11px;background:linear-gradient(135deg,#ff7a59,#ff4f7a);border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;" h="filter:brightness(1.06);">☕&nbsp;Buy me a coffee</Hov>
-                <div style={css("font-size:10px;color:#54545e;margin-top:14px;")}>SSH&nbsp;Ache · v0.4.0</div>
+                <div style={css("font-size:10px;color:#54545e;margin-top:14px;")}>SSH&nbsp;Ache · v{v.appVersion}</div>
               </div>
             </div>
           </div>
         )}
+
+        {/* FIRST-RUN TOUR */}
+        {!v.tourSeen && (() => {
+          const step = TOUR_STEPS[Math.min(v.tourStep, TOUR_STEPS.length - 1)];
+          const last = v.tourStep >= TOUR_STEPS.length - 1;
+          return (
+            <div style={css("position:absolute;inset:0;background:rgba(5,5,7,.74);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:90;animation:acaFade .15s ease;")}>
+              <div style={css("position:relative;width:444px;max-width:96%;background:#0c0c10;border:1px solid #26262e;border-radius:16px;box-shadow:0 40px 100px rgba(0,0,0,.7);padding:30px 28px 24px;text-align:center;animation:acaModal .2s cubic-bezier(.2,.8,.2,1);")}>
+                <div onClick={v.tourDone} style={css("position:absolute;top:14px;right:16px;font-size:11px;color:#6a6a74;cursor:pointer;")}>Skip ✕</div>
+                <div style={{ ...css("width:64px;height:64px;margin:0 auto;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:700;color:#0c0b0a;"), background: 'linear-gradient(135deg,var(--accent-hi),var(--accent))', boxShadow: '0 0 30px rgba(var(--accent-rgb),.45)' }}>{step.icon}</div>
+                <div style={css("font-size:18px;font-weight:700;color:#f2f2f5;margin-top:18px;")}>{step.title}</div>
+                <div style={css("font-size:12.5px;color:#9a9aa3;margin-top:9px;line-height:1.62;")}>{step.body}</div>
+                <div style={css("display:flex;align-items:center;justify-content:center;gap:6px;margin-top:20px;")}>
+                  {TOUR_STEPS.map((_, i) => (<span key={i} style={{ width: i === v.tourStep ? '18px' : '6px', height: '6px', borderRadius: '3px', background: i === v.tourStep ? 'var(--accent)' : 'var(--border2)', transition: 'all .2s ease' }}></span>))}
+                </div>
+                <div style={css("display:flex;gap:10px;margin-top:22px;")}>
+                  {v.tourStep > 0 && (<Hov as="button" onClick={v.tourBack} s="flex:1;padding:10px;background:#101015;border:1px solid #20202a;border-radius:9px;color:#b9b9c2;font:inherit;font-size:12px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Back</Hov>)}
+                  <Hov as="button" onClick={last ? v.tourDone : v.tourNext} s="flex:2;padding:10px;background:#ff7a59;border:none;border-radius:9px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:700;cursor:pointer;" h="background:#ff8d70;">{last ? 'Get started' : 'Next'}</Hov>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* CONNECTION LOADER */}
         {v.connectingActive && (
@@ -2246,11 +2419,49 @@ export default class App extends React.Component<any, any> {
                   </div>
                 </div>
 
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:12px;")}>Updates</div>
+                  <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;")}>
+                    <div style={css("flex:1;")}>
+                      <div style={css("font-size:11.5px;color:#9a9aa3;")}>{v.updateInfo ? ('Version ' + v.updateInfo.version + ' is available') : 'You are on the latest version'}</div>
+                      <div style={css("font-size:10px;color:#54545e;margin-top:2px;")}>Current · v{v.appVersion}</div>
+                    </div>
+                    {v.updateInfo ? (
+                      <Hov as="button" onClick={v.doDownloadUpdate} s="padding:7px 14px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:11px;font-weight:700;cursor:pointer;flex:none;" h="background:#ff8d70;">Download v{v.updateInfo.version}</Hov>
+                    ) : (
+                      <Hov as="button" onClick={v.doCheckUpdate} s="padding:7px 12px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;flex:none;" h="background:#16161c;color:#ededf0;">{v.updateChecking ? 'Checking…' : 'Check for updates'}</Hov>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff6b78;margin-bottom:12px;")}>Danger zone</div>
+                  <div style={css("display:flex;align-items:center;gap:10px;padding:12px 14px;background:#0e0e12;border:1px solid rgba(255,107,120,.25);border-radius:9px;")}>
+                    <span style={css("flex:1;font-size:11.5px;color:#9a9aa3;")}>Permanently delete all saved connections, settings, and stored secrets.</span>
+                    <Hov as="button" onClick={v.openClearConfirm} s="padding:7px 12px;background:rgba(255,107,120,.12);border:1px solid rgba(255,107,120,.4);border-radius:7px;color:#ff6b78;font:inherit;font-size:11px;font-weight:600;cursor:pointer;flex:none;" h="background:rgba(255,107,120,.2);">Clear all data</Hov>
+                  </div>
+                </div>
+
               </div>
               <div style={css("flex:none;display:flex;align-items:center;padding:14px 22px;border-top:1px solid #18181f;")}>
-                <span style={css("font-size:10.5px;color:#54545e;")}>SSH Ache · v0.4.0</span>
+                <span style={css("font-size:10.5px;color:#54545e;")}>SSH Ache · v{v.appVersion}</span>
                 <span style={css("flex:1;")}></span>
                 <Hov as="button" onClick={v.closeSettings} s="padding:9px 18px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Done</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* CLEAR ALL DATA — confirmation */}
+        {v.clearConfirmOpen && (
+          <div onClick={v.cancelClearConfirm} style={css("position:absolute;inset:0;background:rgba(5,5,7,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:85;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:404px;max-width:96%;background:#0c0c10;border:1px solid rgba(255,107,120,.3);border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.6);padding:26px 24px;text-align:center;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("width:52px;height:52px;margin:0 auto;border-radius:14px;display:flex;align-items:center;justify-content:center;background:rgba(255,107,120,.12);border:1px solid rgba(255,107,120,.35);color:#ff6b78;font-size:24px;")}>⚠</div>
+              <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:16px;")}>Clear all data?</div>
+              <div style={css("font-size:12.5px;color:#9a9aa3;margin-top:9px;line-height:1.6;")}>This permanently deletes every saved connection, your settings, and all secrets stored in the OS keychain. This can't be undone.</div>
+              <div style={css("display:flex;gap:10px;margin-top:22px;")}>
+                <Hov as="button" onClick={v.cancelClearConfirm} s="flex:1;padding:11px;background:#101015;border:1px solid #20202a;border-radius:9px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
+                <Hov as="button" onClick={v.doClearAll} s="flex:1;padding:11px;background:#ff6b78;border:none;border-radius:9px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;" h="background:#ff8591;">Delete everything</Hov>
               </div>
             </div>
           </div>
