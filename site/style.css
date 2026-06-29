@@ -527,7 +527,7 @@ code, pre, kbd {
 .footer-about p { font-size: 13px; color: var(--dim); margin: 0; }
 
 .footer-links { display: flex; gap: 56px; flex-wrap: wrap; }
-.footer-col h4 {
+.footer-col h3 {
   font-size: 12px;
   letter-spacing: .12em;
   text-transform: uppercase;
@@ -591,7 +591,7 @@ code, pre, kbd {
   background: var(--panel-2);
   padding: 18px 16px;
 }
-.docs-toc h4 {
+.docs-toc h3 {
   font-size: 12px;
   letter-spacing: .14em;
   text-transform: uppercase;
@@ -914,3 +914,9 @@ kbd {
 .gk-coffee strong { color: var(--text); }
 .gk-coffee a { color: var(--brand-solid); font-weight: 500; }
 .gk-coffee a:hover { color: var(--brand-hover); }
+
+/* Inline (in-sentence) links get an underline so they aren't colour-only. */
+.install-foot a, .doc-section a, .callout a, .gk-coffee a, .footer-about p a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
