@@ -15,10 +15,10 @@
   </script>
 
   <title>SSH Ache — Desktop SSH Client with Terminal, SFTP &amp; Port Forwarding</title>
-  <meta name="description" content="SSH Ache is a desktop SSH client with a clean terminal UI — SSH sessions, SFTP, and port forwarding. Secrets in your OS keychain, data encrypted at rest." />
+  <meta name="description" content="SSH Ache is a desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), port forwarding and a SOCKS proxy. Secrets in your OS keychain, data encrypted at rest." />
   <link rel="canonical" href="https://sshache.com/" />
   <meta name="robots" content="index, follow, max-image-preview:large" />
-  <meta name="keywords" content="SSH client, desktop SSH client, SSH terminal, SFTP client, port forwarding, ssh gui, ssh app, macOS SSH client, Windows SSH client, Linux SSH client" />
+  <meta name="keywords" content="SSH client, desktop SSH client, SSH terminal, SFTP client, port forwarding, SOCKS proxy, ProxyJump, bastion host, ssh config import, ssh gui, ssh app, macOS SSH client, Windows SSH client, Linux SSH client" />
   <meta name="author" content="Noor Ajmir Tanvir" />
   <meta name="theme-color" content="#0a0a0d" />
   <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg" />
@@ -28,7 +28,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="SSH Ache" />
   <meta property="og:title" content="SSH Ache — Desktop SSH Client with Terminal, SFTP &amp; Port Forwarding" />
-  <meta property="og:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, and port forwarding. Secrets in your OS keychain, data encrypted at rest." />
+  <meta property="og:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Secrets in your OS keychain, data encrypted at rest." />
   <meta property="og:url" content="https://sshache.com/" />
   <meta property="og:locale" content="en_US" />
   <meta property="og:image" content="https://sshache.com/assets/og-image.png" />
@@ -39,7 +39,7 @@
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="SSH Ache — Desktop SSH Client" />
-  <meta name="twitter:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, and port forwarding. Encrypted at rest." />
+  <meta name="twitter:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Encrypted at rest." />
   <meta name="twitter:image" content="https://sshache.com/assets/og-image.png" />
 
   <!-- Fonts -->
@@ -981,9 +981,10 @@ kbd {
     "operatingSystem": "macOS, Windows, Linux",
     "url": "https://sshache.com/",
     "downloadUrl": "https://github.com/TanvirMahin24/sshache/releases",
-    "softwareVersion": "0.1.4",
-    "description": "A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, port forwarding, and an approval-gated AI agent bridge. Secrets live in the OS keychain and your data is encrypted at rest.",
+    "softwareVersion": "0.2.0",
+    "description": "A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), ~/.ssh/config import, broadcast input, port forwarding, a SOCKS proxy, and an approval-gated AI agent bridge. Secrets live in the OS keychain and your data is encrypted at rest.",
     "image": "https://sshache.com/assets/og-image.png",
+    "featureList": "Real terminal (russh + xterm.js), tabs and split panes, host vault, host-key verification, SFTP browser with create/rename/delete, jump hosts (ProxyJump), import ~/.ssh/config, broadcast input, local and remote port forwarding, dynamic SOCKS proxy, scrollback search, on-connect commands, encrypted backup, idle vault lock, approval-gated MCP agent bridge",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "author": { "@type": "Person", "name": "Noor Ajmir Tanvir", "url": "https://tanvirmahin.com" }
   }
@@ -1021,9 +1022,9 @@ kbd {
         <img class="wordmark" src="assets/logo-wordmark.svg" alt="SSH Ache" width="400" height="100" fetchpriority="high" />
         <h1>The desktop SSH client that<br /><span class="gradient-text">keeps your data home.</span></h1>
         <p class="lead">
-          A desktop SSH client with a clean terminal UI — connections, SFTP, port
-          forwarding, and an approval-gated AI agent bridge, with your data kept on
-          your machine and encrypted at rest.
+          A desktop SSH client with a clean terminal UI — connections, SFTP, jump
+          hosts, port forwarding and a SOCKS proxy, and an approval-gated AI agent
+          bridge, with your data kept on your machine and encrypted at rest.
         </p>
 
         <blockquote class="motto">
@@ -1077,13 +1078,37 @@ kbd {
           <article class="card">
             <div class="icon" aria-hidden="true">📁</div>
             <h3>SFTP browser</h3>
-            <p>Dual-pane local/remote navigation with drag-and-drop transfer of multiple files and whole folders, plus a replace/skip conflict prompt.</p>
+            <p>Dual-pane local/remote navigation with drag-and-drop transfer of files and whole folders, a replace/skip conflict prompt, and remote create-folder, rename, and delete.</p>
           </article>
 
           <article class="card">
             <div class="icon" aria-hidden="true">🔀</div>
-            <h3>Port forwarding</h3>
-            <p>Local forwards bridged over the SSH connection, so remote services reach you through a tunnel you control.</p>
+            <h3>Port forwarding &amp; SOCKS</h3>
+            <p>Local (<code>-L</code>) and remote (<code>-R</code>) forwards plus a dynamic SOCKS5 proxy (<code>-D</code>) — point a browser at <code>socks5h://localhost</code> and route through the box.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon" aria-hidden="true">🛫</div>
+            <h3>Jump hosts (ProxyJump)</h3>
+            <p>Reach a host through a saved bastion in one click. The jump host's key is verified too — an unknown or changed bastion key is refused, not waved through.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon" aria-hidden="true">📥</div>
+            <h3>Import <code>~/.ssh/config</code></h3>
+            <p>Pull your existing hosts — including their <code>ProxyJump</code> links — straight into the vault, so switching from the command line takes seconds.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon" aria-hidden="true">📡</div>
+            <h3>Broadcast input</h3>
+            <p>Type once and send to every split pane in a tab — run the same command across a fleet of servers at the same time, cluster-SSH style.</p>
+          </article>
+
+          <article class="card">
+            <div class="icon" aria-hidden="true">🔎</div>
+            <h3>Search &amp; on-connect commands</h3>
+            <p>Find text in the terminal scrollback with <code>⌘F</code>, and give any host an on-connect command — <code>tmux attach</code>, an env setup, whatever — that runs the moment the shell opens.</p>
           </article>
 
           <article class="card">

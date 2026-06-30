@@ -15,6 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import logoMark from "./assets/logo-mark.svg";
 
 type S = React.CSSProperties;
@@ -112,6 +113,9 @@ const dedupeBorder = (st: any): S => {
 
 // ---- persistence: file store in Tauri, localStorage in the browser ----
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+// On macOS the window uses native traffic lights (titleBarStyle: Overlay), so we
+// hide our custom min/max/close glyphs and leave room for them on the left.
+const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent || (navigator as any).platform || "");
 
 const AUTHOR = {
   name: "Noor Ajmir Tanvir",
@@ -146,6 +150,39 @@ const saveCfg = (name: string, data: string) => {
   try { localStorage.setItem("sshache." + name, data); } catch (_) {}
   if (isTauri) invoke("write_config", { name, data }).catch(() => {});
 };
+
+// Minimal ~/.ssh/config parser → [{ alias, addr, user, port, keyPath, jump }].
+// Skips wildcard Host patterns (Host * / ?). Captures the first ProxyJump hop as
+// a bare alias/host (user@ and :port stripped); chained jumps are ignored.
+function parseSshConfig(text: string) {
+  const out: any[] = [];
+  let cur: any = null;
+  for (const lineRaw of (text || "").split(/\r?\n/)) {
+    const line = lineRaw.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const m = line.match(/^(\S+)\s+(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim();
+    if (key === "host") {
+      if (cur) out.push(cur);
+      const alias = val.split(/\s+/)[0];
+      cur = /[*?]/.test(alias) ? null : { alias, addr: alias, user: "", port: "", keyPath: "", jump: "" };
+      continue;
+    }
+    if (!cur) continue;
+    if (key === "hostname") cur.addr = val;
+    else if (key === "user") cur.user = val;
+    else if (key === "port") cur.port = val;
+    else if (key === "identityfile") cur.keyPath = val.replace(/^["']|["']$/g, "");
+    else if (key === "proxyjump") {
+      const first = val.split(",")[0].trim();
+      if (first.toLowerCase() !== "none") cur.jump = first.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 // Secrets live in the OS keychain (Tauri) — never in the config file or
 // localStorage. Each host id maps to a JSON blob { password?, passphrase?, keyText? }.
@@ -267,9 +304,11 @@ const cursorStyleOf = (c: string) => (c === "bar" ? "bar" : c === "underline" ? 
 // A live SSH pane: a real xterm.js terminal wired to the russh backend over a
 // per-pane sessionId. Created once on mount; disconnected + disposed on unmount.
 // In a plain browser (no Tauri runtime) it shows a hint instead of connecting.
-function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register }: any) {
+function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register, isBroadcast, onBroadcast, onCwd }: any) {
   const wrapRef = React.useRef<any>(null);
   const inst = React.useRef<any>(null);
+  const searchRef = React.useRef<any>(null);
+  const [find, setFind] = React.useState<any>(null); // null | { q: string }
 
   React.useEffect(() => {
     const term = new Terminal({
@@ -282,11 +321,35 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
+    searchRef.current = search;
     term.open(wrapRef.current);
     try { fit.fit(); } catch (_) {}
     term.focus();
     inst.current = { term, fit };
     if (register) register(session.sessionId, { clear: () => term.clear() });
+    // ⌘F / Ctrl+F opens the in-terminal find bar (swallow it so the shell
+    // never sees the keystroke).
+    term.attachCustomKeyEventHandler((e: any) => {
+      if (e.type === "keydown" && (e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
+        setFind((f: any) => f || { q: "" });
+        return false;
+      }
+      return true;
+    });
+    // OSC 7 (file://host/path) — shells that emit it drive the live cwd shown in
+    // the pane header. ponytail: silently ignored by shells that don't.
+    try {
+      term.parser.registerOscHandler(7, (data: string) => {
+        let p = data;
+        const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
+        if (m) p = m[1];
+        try { p = decodeURIComponent(p); } catch (_) {}
+        if (onCwd && p) onCwd(p);
+        return true;
+      });
+    } catch (_) {}
 
     const h = session.host || {};
     const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -306,7 +369,10 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       invoke("pty_spawn", { id: session.sessionId, cols: term.cols, rows: term.rows, onData: onDataL, onClose: onCloseL })
         .then(() => { if (!disposed && onConnected) onConnected(); })
         .catch((e) => { term.writeln(`\r\n\x1b[31mlocal shell failed: ${String(e)}\x1b[0m`); if (onError) onError(String(e)); });
-      const dataSubL = term.onData((d) => { invoke("pty_write", { id: session.sessionId, data: d }).catch(() => {}); });
+      const dataSubL = term.onData((d) => {
+        if (isBroadcast && isBroadcast() && onBroadcast) { onBroadcast(d); return; }
+        invoke("pty_write", { id: session.sessionId, data: d }).catch(() => {});
+      });
       const roL = new ResizeObserver(() => { try { fit.fit(); invoke("pty_resize", { id: session.sessionId, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
       roL.observe(wrapRef.current);
       return () => {
@@ -334,12 +400,18 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       secret: session.secret || "",
       keyPath: h.keyPath || "",
       keyText: session.keyText || "",
+      jump: session.jump || null,
       cols: term.cols,
       rows: term.rows,
       onData,
       onClose,
     })
-      .then(() => { if (!disposed && onConnected) onConnected(); })
+      .then(() => {
+        if (disposed) return;
+        // On-connect snippet: run the host's saved command once the shell is up.
+        if (h.snippet && h.snippet.trim()) invoke("ssh_write", { sessionId: session.sessionId, data: h.snippet.trim() + "\n" }).catch(() => {});
+        if (onConnected) onConnected();
+      })
       .catch((e) => {
         if (disposed) return;
         const msg = String(e);
@@ -359,7 +431,10 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
         if (onError) onError(msg);
       });
 
-    const dataSub = term.onData((d) => { invoke("ssh_write", { sessionId: session.sessionId, data: d }).catch(() => {}); });
+    const dataSub = term.onData((d) => {
+      if (isBroadcast && isBroadcast() && onBroadcast) { onBroadcast(d); return; }
+      invoke("ssh_write", { sessionId: session.sessionId, data: d }).catch(() => {});
+    });
     const ro = new ResizeObserver(() => {
       try { fit.fit(); invoke("ssh_resize", { sessionId: session.sessionId, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {}
     });
@@ -387,7 +462,28 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
     try { i.fit.fit(); } catch (_) {}
   }, [theme.bg, theme.fg, theme.accent, fontSize, cursor, scrollback]);
 
-  return <div ref={wrapRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "6px 8px", background: theme.bg }} />;
+  const runFind = (q: string, prev: boolean) => {
+    const s = searchRef.current; if (!s || !q) return;
+    if (prev) s.findPrevious(q); else s.findNext(q);
+  };
+  const closeFind = () => { setFind(null); if (inst.current) inst.current.term.focus(); };
+
+  return (
+    <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div ref={wrapRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "6px 8px", background: theme.bg }} />
+      {find && (
+        <div style={{ position: "absolute", top: 8, right: 12, display: "flex", alignItems: "center", gap: 6, background: "#15151b", border: "1px solid #2a2a33", borderRadius: 8, padding: "5px 6px 5px 10px", boxShadow: "0 8px 24px rgba(0,0,0,.45)", zIndex: 8 }}>
+          <input autoFocus value={find.q} placeholder="Find in terminal…" spellCheck={false}
+            onChange={(e) => { const q = e.target.value; setFind({ q }); runFind(q, false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFind(find.q, e.shiftKey); } else if (e.key === "Escape") { e.preventDefault(); closeFind(); } }}
+            style={{ width: 180, background: "#0e0e12", border: "1px solid #20202a", borderRadius: 6, padding: "6px 9px", color: "#ededf0", font: "inherit", fontSize: 12, outline: "none" }} />
+          <button title="Previous (⇧⏎)" onClick={() => runFind(find.q, true)} style={{ background: "transparent", border: "none", color: "#9a9aa3", cursor: "pointer", fontSize: 13, padding: "2px 4px" }}>↑</button>
+          <button title="Next (⏎)" onClick={() => runFind(find.q, false)} style={{ background: "transparent", border: "none", color: "#9a9aa3", cursor: "pointer", fontSize: 13, padding: "2px 4px" }}>↓</button>
+          <button title="Close (Esc)" onClick={closeFind} style={{ background: "transparent", border: "none", color: "#9a9aa3", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}>×</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default class App extends React.Component<any, any> {
@@ -396,6 +492,45 @@ export default class App extends React.Component<any, any> {
   inputRefs = {};
   termApis = {};
   registerTerm = (id, api) => { if (api) this.termApis[id] = api; else delete this.termApis[id]; };
+
+  // Broadcast input: when on, a keystroke in any pane of the active tab is sent
+  // to every live pane in that tab (cluster-ssh). Read live via a stable getter
+  // so TermPane's mount-time onData closure always sees the current flag.
+  isBroadcast = () => !!this.state.broadcast;
+  broadcastInput = (data) => {
+    const t = this.state.tabs.find(x => x.id === this.state.activeTabId);
+    if (!t) return;
+    t.panes.forEach(p => {
+      if (!p.live) return;
+      if (p.kind === 'local') invoke('pty_write', { id: p.sessionId, data }).catch(() => {});
+      else invoke('ssh_write', { sessionId: p.sessionId, data }).catch(() => {});
+    });
+  };
+  toggleBroadcast = () => this.setState(s => ({ broadcast: !s.broadcast, paletteOpen: false }));
+
+  // Live cwd from OSC 7 → pane header.
+  setPaneCwd = (sessionId, cwd) => {
+    if (!cwd) return;
+    this.setState(s => ({ tabs: s.tabs.map(t => ({ ...t, panes: t.panes.map(p => p.sessionId === sessionId ? (p.cwd === cwd ? p : { ...p, cwd }) : p) })) }));
+  };
+
+  // Resolve a saved host id into the jump (bastion) credentials ssh_connect
+  // needs. Returns null for none / self-reference / missing host. One hop only:
+  // the jump host's own jumpHost is intentionally ignored.
+  async buildJump(jumpId, selfId) {
+    if (!jumpId || jumpId === selfId) return null;
+    const jh = this.state.hosts.find(h => h.id === jumpId);
+    if (!jh) return null;
+    const auth = jh.auth || 'password';
+    let secret = '', keyText = '';
+    if (auth !== 'agent') {
+      const saved = await secretGet(jh.id);
+      if (auth === 'key') { secret = (saved && saved.passphrase) || ''; keyText = (saved && saved.keyText) || ''; }
+      else { secret = (saved && saved.password) || ''; }
+    }
+    return { host: jh.addr, port: Number(jh.port) || 22, user: jh.user || 'root', auth, secret, keyPath: jh.keyPath || '', keyText };
+  }
+
   uid = 100;
   _drag = null;
 
@@ -431,6 +566,7 @@ export default class App extends React.Component<any, any> {
     update: null,        // null | { version, url, asset }
     updateChecking: false,
     view: 'dashboard',
+    broadcast: false,
     search: '',
     activeFolder: 'all',
     activeTags: [],
@@ -439,7 +575,7 @@ export default class App extends React.Component<any, any> {
     editingId: null,
     newHostId: null,
     hosts: [],
-    form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', tagInput:'', tags:[] },
+    form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
     settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false },
     activeTabId: 't1',
     activePaneId: 'p1',
@@ -470,6 +606,7 @@ export default class App extends React.Component<any, any> {
     sftpId: null,
     sftpStatus: 'idle', // idle | connecting | ready | error
     sftpErr: '',
+    sftpPrompt: null, // null | { mode:'mkdir'|'rename'|'delete', ... }
     conflict: null,
     conflictAll: false,
     conflictPolicy: null, // null | 'replace' | 'skip' (set by "Apply to all")
@@ -578,22 +715,45 @@ export default class App extends React.Component<any, any> {
   };
 
   // ---- local port forwarding (-L) ----
-  startForward() {
+  // mode: 'local' (-L) | 'socks' (-D) | 'remote' (-R)
+  startForward(mode = 'local') {
     if (!isTauri) { this.pushToast({ type: 'info', title: 'Port forward', msg: 'Available in the desktop app.' }); return; }
     const tab = this.state.tabs.find(t => t.id === this.state.activeTabId);
     const pane = tab && tab.panes.find(p => p.live && (p.kind || 'ssh') === 'ssh');
     if (!pane) { this.pushToast({ type: 'info', title: 'Port forward', msg: 'Open an SSH connection first.' }); return; }
-    this.setState({ fwdPrompt: { localPort: '', remoteHost: '127.0.0.1', remotePort: '', sessionId: pane.sessionId, host: pane.host, secret: pane.secret, keyText: pane.keyText }, paletteOpen: false });
+    this.setState({ fwdPrompt: { mode, localPort: '', remoteHost: '127.0.0.1', remotePort: '', sessionId: pane.sessionId, host: pane.host, secret: pane.secret, keyText: pane.keyText, jump: pane.jump || null }, paletteOpen: false });
   }
   setFwd = (k, val) => this.setState(s => ({ fwdPrompt: s.fwdPrompt ? { ...s.fwdPrompt, [k]: val } : null }));
   submitForward = () => {
     const f = this.state.fwdPrompt;
     if (!f) return;
+    const h = f.host, mode = f.mode || 'local';
+    const base = { host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth || 'password', secret: f.secret || '', keyPath: h.keyPath || '', keyText: f.keyText || '' };
+    if (mode === 'socks') {
+      const lp = parseInt(f.localPort, 10);
+      if (!lp) { this.pushToast({ type: 'err', title: 'Invalid proxy', msg: 'Need a local port.' }); return; }
+      const label = `SOCKS5 · localhost:${lp}`, id = f.sessionId + ':socks:' + lp;
+      this.setState({ fwdPrompt: null });
+      invoke('socks_start', { id, ...base, localPort: lp })
+        .then(() => { this.setState(s => ({ forwards: [...s.forwards, { id, sessionId: f.sessionId, label }] })); this.pushToast({ type: 'ok', title: 'SOCKS proxy started', msg: label }); })
+        .catch((e) => this.pushToast({ type: 'err', title: 'Proxy failed', msg: String(e) }));
+      return;
+    }
+    if (mode === 'remote') {
+      const rp = parseInt(f.remotePort, 10), lp = parseInt(f.localPort, 10);
+      if (!rp || !lp || !f.remoteHost.trim()) { this.pushToast({ type: 'err', title: 'Invalid forward', msg: 'Need remote port, local host, and local port.' }); return; }
+      const label = `remote :${rp} → ${f.remoteHost.trim()}:${lp}`, id = f.sessionId + ':rfwd:' + rp;
+      this.setState({ fwdPrompt: null });
+      invoke('remote_forward_start', { id, ...base, remotePort: rp, localHost: f.remoteHost.trim(), localPort: lp })
+        .then(() => { this.setState(s => ({ forwards: [...s.forwards, { id, sessionId: f.sessionId, label }] })); this.pushToast({ type: 'ok', title: 'Remote forward started', msg: label }); })
+        .catch((e) => this.pushToast({ type: 'err', title: 'Remote forward failed', msg: String(e) }));
+      return;
+    }
     const lp = parseInt(f.localPort, 10), rp = parseInt(f.remotePort, 10);
     if (!lp || !rp || !f.remoteHost.trim()) { this.pushToast({ type: 'err', title: 'Invalid forward', msg: 'Need local port, remote host, and remote port.' }); return; }
-    const h = f.host, label = `localhost:${lp} → ${f.remoteHost.trim()}:${rp}`, id = f.sessionId + ':fwd:' + lp;
+    const label = `localhost:${lp} → ${f.remoteHost.trim()}:${rp}`, id = f.sessionId + ':fwd:' + lp;
     this.setState({ fwdPrompt: null });
-    invoke('forward_start', { id, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth || 'password', secret: f.secret || '', keyPath: h.keyPath || '', keyText: f.keyText || '', localPort: lp, remoteHost: f.remoteHost.trim(), remotePort: rp })
+    invoke('forward_start', { id, ...base, localPort: lp, remoteHost: f.remoteHost.trim(), remotePort: rp })
       .then(() => { this.setState(s => ({ forwards: [...s.forwards, { id, sessionId: f.sessionId, label }] })); this.pushToast({ type: 'ok', title: 'Port forward started', msg: label }); })
       .catch((e) => this.pushToast({ type: 'err', title: 'Forward failed', msg: String(e) }));
   };
@@ -764,7 +924,8 @@ export default class App extends React.Component<any, any> {
         if (auth === 'key') { if (!keyText && !has(v)) continue; secret = has(v) ? v : ''; }
         else { if (!has(v)) continue; secret = v; }
       }
-      this.beginConnect(host, secret, true, keyText);
+      const jump = await this.buildJump(host.jumpHost, host.id);
+      this.beginConnect(host, secret, true, keyText, jump);
     }
   }
   _closeTabState(s, tabId) {
@@ -786,7 +947,7 @@ export default class App extends React.Component<any, any> {
           // Splitting a live session opens a second, independent shell to the
           // same host (its own sessionId → its own backend SSH session).
           const nid = this.genId();
-          np = { id: nid, live: true, kind: src.kind || 'ssh', sessionId: nid, host: src.host, secret: src.secret, keyText: src.keyText, user: src.user, hostName: src.hostName, cwd: src.cwd };
+          np = { id: nid, live: true, kind: src.kind || 'ssh', sessionId: nid, host: src.host, secret: src.secret, keyText: src.keyText, jump: src.jump || null, user: src.user, hostName: src.hostName, cwd: src.cwd };
         } else {
           np = { id: this.genId(), user: src.user, host: src.host, cwd: src.cwd, input: '', lines: [
             { t: 'sys', x: 'SSH Ache — new pane' },
@@ -917,34 +1078,35 @@ export default class App extends React.Component<any, any> {
   async connectHost(host) {
     if (this.state.connecting) return;
     const auth = host.auth || 'password';
-    if (auth === 'agent') { this.beginConnect(host, '', false, ''); return; }
+    const jump = await this.buildJump(host.jumpHost, host.id);
+    if (auth === 'agent') { this.beginConnect(host, '', false, '', jump); return; }
     // Use remembered secrets from the keychain if present; otherwise prompt.
     const saved = await secretGet(host.id);
     const keyText = saved && saved.keyText ? saved.keyText : '';
     const has = (x) => x !== undefined && x !== null;
     if (auth === 'key') {
       // A pasted key with no passphrase still connects; otherwise saved/prompt.
-      if (keyText && !has(saved && saved.passphrase)) { this.beginConnect(host, '', false, keyText); return; }
-      if (saved && has(saved.passphrase)) { this.beginConnect(host, saved.passphrase, false, keyText); return; }
-      this.setState({ secretPrompt: { host, kind: auth, value: '', keyText }, paletteOpen: false });
+      if (keyText && !has(saved && saved.passphrase)) { this.beginConnect(host, '', false, keyText, jump); return; }
+      if (saved && has(saved.passphrase)) { this.beginConnect(host, saved.passphrase, false, keyText, jump); return; }
+      this.setState({ secretPrompt: { host, kind: auth, value: '', keyText, jump }, paletteOpen: false });
       return;
     }
-    if (saved && has(saved.password)) { this.beginConnect(host, saved.password, false, ''); return; }
-    this.setState({ secretPrompt: { host, kind: auth, value: '' }, paletteOpen: false });
+    if (saved && has(saved.password)) { this.beginConnect(host, saved.password, false, '', jump); return; }
+    this.setState({ secretPrompt: { host, kind: auth, value: '', jump }, paletteOpen: false });
   }
   submitSecret = () => {
     const sp = this.state.secretPrompt;
     if (!sp) return;
     this.setState({ secretPrompt: null });
-    this.beginConnect(sp.host, sp.value, false, sp.keyText || '');
+    this.beginConnect(sp.host, sp.value, false, sp.keyText || '', sp.jump || null);
   };
   cancelSecret = () => this.setState({ secretPrompt: null });
-  beginConnect(host, secret, silent, keyText) {
+  beginConnect(host, secret, silent, keyText, jump) {
     const id = this.genId(), pid = this.genId();
     const tab = { id, title: host.name, host: host.name, user: host.user, addr: host.addr, layout: 'row', sizes: [100], panes: [
-      { id: pid, live: true, kind: 'ssh', sessionId: pid, host, secret, keyText: keyText || '', user: host.user, hostName: host.name, cwd: '~' }
+      { id: pid, live: true, kind: 'ssh', sessionId: pid, host, secret, keyText: keyText || '', jump: jump || null, user: host.user, hostName: host.name, cwd: '~' }
     ] };
-    this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', paletteOpen: false, ...(silent ? {} : { connecting: { host, secret, tabId: id, failed: false, step: 0 } }) }));
+    this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', paletteOpen: false, ...(silent ? {} : { connecting: { host, secret, keyText: keyText || '', jump: jump || null, tabId: id, failed: false, step: 0 } }) }));
   }
   // Flip a pane's live-connection flag (drives the orange dot on the tab).
   setPaneConnected(tabId, paneId, val) {
@@ -973,14 +1135,14 @@ export default class App extends React.Component<any, any> {
   handleHostKey(tab, fp, key) {
     const c = this.state.connecting;
     if (!c) return;
-    this.setState({ connecting: null, hostKeyPrompt: { host: c.host, secret: c.secret, tabId: tab.id, fp, key } });
+    this.setState({ connecting: null, hostKeyPrompt: { host: c.host, secret: c.secret, keyText: c.keyText || '', jump: c.jump || null, tabId: tab.id, fp, key } });
   }
   acceptHostKey = () => {
     const hk = this.state.hostKeyPrompt;
     if (!hk) return;
     this.setState({ hostKeyPrompt: null });
     this.closeTab(hk.tabId, true);
-    const proceed = () => this.beginConnect(hk.host, hk.secret);
+    const proceed = () => this.beginConnect(hk.host, hk.secret, false, hk.keyText || '', hk.jump || null);
     if (isTauri) {
       invoke('trust_host', { host: hk.host.addr, port: Number(hk.host.port) || 22, key: hk.key })
         .then(proceed)
@@ -1104,6 +1266,35 @@ export default class App extends React.Component<any, any> {
     if (!id) return;
     invoke('sftp_list', { id, path }).then((files) => this.setState({ remoteFiles: files, remotePath: path, selRemote: [] })).catch((e) => this.setState({ sftpErr: String(e) }));
   }
+  // ---- remote SFTP file ops (mkdir / rename / delete) ----
+  _sftpJoin(a, b) { return (a === '/' ? '' : (a || '').replace(/\/+$/, '')) + '/' + b; }
+  sftpMkdirStart = () => { if (this.state.sftpId) this.setState({ sftpPrompt: { mode: 'mkdir', value: '' } }); };
+  sftpRenameStart = () => {
+    const sel = this.state.selRemote;
+    if (sel.length !== 1) { this.pushToast({ type: 'info', title: 'Rename', msg: 'Select exactly one remote item.' }); return; }
+    this.setState({ sftpPrompt: { mode: 'rename', value: sel[0], orig: sel[0] } });
+  };
+  sftpDeleteStart = () => {
+    const sel = this.state.selRemote;
+    if (!sel.length) { this.pushToast({ type: 'info', title: 'Delete', msg: 'Select remote items first.' }); return; }
+    this.setState({ sftpPrompt: { mode: 'delete', names: sel } });
+  };
+  sftpPromptCancel = () => this.setState({ sftpPrompt: null });
+  sftpPromptSubmit = async () => {
+    const p = this.state.sftpPrompt; if (!p) return;
+    const id = this.state.sftpId, base = this.state.remotePath;
+    this.setState({ sftpPrompt: null });
+    try {
+      if (p.mode === 'mkdir') { const name = (p.value || '').trim(); if (!name) return; await invoke('sftp_mkdir', { id, path: this._sftpJoin(base, name) }); }
+      else if (p.mode === 'rename') { const name = (p.value || '').trim(); if (!name || name === p.orig) return; await invoke('sftp_rename', { id, from: this._sftpJoin(base, p.orig), to: this._sftpJoin(base, name) }); }
+      else if (p.mode === 'delete') {
+        const list = this.state.remoteFiles;
+        for (const nm of p.names) { const f = list.find(x => x.name === nm); await invoke('sftp_remove', { id, path: this._sftpJoin(base, nm), isDir: !!(f && f.kind === 'dir') }); }
+      }
+      this.listRemote(this.state.remotePath);
+      this.pushToast({ type: 'ok', title: 'SFTP', msg: p.mode === 'mkdir' ? 'Folder created' : p.mode === 'rename' ? 'Renamed' : 'Deleted' });
+    } catch (e) { this.pushToast({ type: 'err', title: 'SFTP error', msg: String(e) }); }
+  };
 
   // ---- encrypted import / export ----
   // Export bundles hosts + settings + keychain secrets, encrypts with the user's
@@ -1139,6 +1330,34 @@ export default class App extends React.Component<any, any> {
     this.setState((s) => ({ hosts: [...s.hosts, h], view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], newHostId: id }));
     if (secret) secretSet(id, secret);
     setTimeout(() => this.setState((s) => (s.newHostId === id ? { newHostId: null } : {})), 2200);
+  }
+  // Import hosts from ~/.ssh/config. Dedups against the vault by user@addr:port;
+  // links ProxyJump to a matching host by alias/name (added or pre-existing).
+  async importSshConfig() {
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'Import', msg: 'Available in the desktop app.' }); return; }
+    let raw = '';
+    try { raw = await invoke('read_ssh_config'); } catch (e) { this.pushToast({ type: 'err', title: 'Import failed', msg: String(e) }); return; }
+    const parsed = parseSshConfig(raw);
+    if (!parsed.length) { this.pushToast({ type: 'info', title: 'Nothing to import', msg: 'No hosts found in ~/.ssh/config.' }); return; }
+    const byName: any = {};
+    this.state.hosts.forEach(h => { byName[h.name] = h.id; });
+    const existing = new Set(this.state.hosts.map(h => (h.user || 'root') + '@' + h.addr + ':' + (h.port || '22')));
+    const newHosts: any[] = [];
+    for (const e of parsed) {
+      const key = (e.user || 'root') + '@' + e.addr + ':' + (e.port || '22');
+      if (existing.has(key)) continue;
+      existing.add(key);
+      const id = this.genId();
+      byName[e.alias] = id;
+      newHosts.push({ id, _jump: e.jump, name: e.alias, addr: e.addr, user: e.user || 'root', port: e.port || '22',
+        auth: e.keyPath ? 'key' : 'agent', keyMode: 'file', keyPath: e.keyPath || '',
+        folder: 'Imported', tags: ['ssh-config'], online: true, lastUsed: 'never' });
+    }
+    const skipped = parsed.length - newHosts.length;
+    if (!newHosts.length) { this.pushToast({ type: 'info', title: 'Already imported', msg: `${skipped} host(s) already in your vault.` }); return; }
+    newHosts.forEach(h => { h.jumpHost = h._jump && byName[h._jump] ? byName[h._jump] : ''; delete h._jump; });
+    this.setState(s => ({ hosts: [...s.hosts, ...newHosts], view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], paletteOpen: false }));
+    this.pushToast({ type: 'ok', title: 'Imported from ~/.ssh/config', msg: `${newHosts.length} host(s)` + (skipped ? `, ${skipped} skipped` : '') });
   }
   async ioSubmit() {
     const io = this.state.ioPrompt;
@@ -1211,13 +1430,13 @@ export default class App extends React.Component<any, any> {
 
   openAddHost() {
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: null,
-      form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', tagInput:'', tags:[] } });
+      form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] } });
   }
   openEditHost(h) {
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: h.id,
       form: { name:h.name, host:h.addr, port:h.port, user:h.user, auth:h.auth, password:'',
         keyMode: h.keyMode || 'file', keyPath: h.keyPath || '', keyText: h.keyText || '', passphrase:'',
-        folder:h.folder, tagInput:'', tags:[...h.tags] } });
+        folder:h.folder, jumpHost: h.jumpHost || '', snippet: h.snippet || '', tagInput:'', tags:[...h.tags] } });
   }
   // Build an `ssh` command line for use in another terminal / tool.
   sshCommand(h) {
@@ -1296,7 +1515,7 @@ export default class App extends React.Component<any, any> {
     const base = {
       name: f.name.trim(), user: (f.user.trim() || 'root'), addr: f.host.trim(),
       port: (f.port.trim() || '22'), folder: (f.folder.trim() || 'Uncategorized'),
-      tags: f.tags, auth: f.auth, keyMode: f.keyMode, keyPath: f.keyPath
+      tags: f.tags, auth: f.auth, keyMode: f.keyMode, keyPath: f.keyPath, jumpHost: f.jumpHost || '', snippet: f.snippet || ''
     };
     const secrets = this._formSecrets(f);
     if (this.state.editingId) {
@@ -1379,12 +1598,13 @@ export default class App extends React.Component<any, any> {
         hostLabel: p.live ? (p.user + '@' + (p.host && p.host.addr ? p.host.addr : (p.hostName || ''))) : (p.user + '@' + p.host),
         promptUser: p.user + '@' + p.host,
         promptColor: theme.accent,
-        live: !!p.live, kind: p.kind || 'ssh', sessionId: p.sessionId, hostObj: p.live ? p.host : null, secret: p.secret, keyText: p.keyText,
+        live: !!p.live, kind: p.kind || 'ssh', sessionId: p.sessionId, hostObj: p.live ? p.host : null, secret: p.secret, keyText: p.keyText, jump: p.jump || null,
         termTheme: { bg: theme.bg, fg: theme.fg, accent: theme.accent, ansi: theme.ansi }, fontSize: s.settings.fontSize,
         cursor: s.settings.cursor, scrollback: parseInt(s.settings.scrollback, 10) || 1000,
         onConnected: () => this.handlePaneConnected(tab, p.id), onError: (msg) => this.handlePaneError(tab, p.id, msg),
         onClosed: () => this.handlePaneClosed(tab, p.id),
         onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
+        onCwd: (path) => this.setPaneCwd(p.sessionId, path),
         boxStyle: { position:'relative', flexGrow:flex, flexShrink:1, flexBasis:0, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(255,122,89,.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.12)' : 'none', transition:'border-color .15s ease' },
         resizerStyle: tlayout === 'row'
           ? { flex:'none', alignSelf:'stretch', width:'10px', cursor:'col-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 }
@@ -1436,6 +1656,8 @@ export default class App extends React.Component<any, any> {
     // command palette
     const baseItems = [
       { name:'Add host', hint:'⌘N', icon:'+', color:'#ff7a59', run: () => this.openAddHost() },
+      { name:'Import from ~/.ssh/config', hint:'hosts', icon:'⤓', color:'#6ea8ff', run: () => this.importSshConfig() },
+      { name: (s.broadcast ? 'Broadcast input: ON — turn off' : 'Broadcast input to all panes'), hint:'cluster', icon:'⇉', color:'#ff7a59', run: () => this.toggleBroadcast() },
       { name:'Open dashboard', hint:'⌘1', icon:'⊞', color:'#6ea8ff', run: () => this.setState({ view:'dashboard' }) },
       { name:'Open terminal', hint:'⌘2', icon:'›_', color:'#46d9a0', run: () => this.setState({ view:'workspace' }) },
       { name:'Settings', hint:'', icon:'⚙', color:'#9a9aa3', run: () => this.openSettings() },
@@ -1448,7 +1670,9 @@ export default class App extends React.Component<any, any> {
       { name:'Toggle sidebar', hint:'⌘B', icon:'▤', color:'#9a9aa3', run: () => this.setState(st => ({ sidebarOpen: !st.sidebarOpen })) },
       { name:'Clear terminal', hint:'', icon:'⌫', color:'#9a9aa3', run: () => this.clearActive() },
       { name:'Lock now', hint:'', icon:'⚿', color:'#ff7a59', run: () => this.lockNow() },
-      { name:'Add port forward', hint:'-L', icon:'⇄', color:'#46d9a0', run: () => this.startForward() },
+      { name:'Add port forward', hint:'-L', icon:'⇄', color:'#46d9a0', run: () => this.startForward('local') },
+      { name:'Add dynamic SOCKS proxy', hint:'-D', icon:'⊝', color:'#bd93f9', run: () => this.startForward('socks') },
+      { name:'Add remote forward', hint:'-R', icon:'⇆', color:'#6ea8ff', run: () => this.startForward('remote') },
       { name:'Stop port forwards', hint:'', icon:'⊘', color:'#ff6b78', run: () => this.stopAllForwards() }
     ];
     const hostItems = s.hosts.map(h => ({ name:'Connect — ' + h.name, hint:h.addr, icon:'›', color:'#ff7a59', run: () => this.connectHost(h) }));
@@ -1647,6 +1871,11 @@ export default class App extends React.Component<any, any> {
       localColStyle: dragBox('local'), remoteColStyle: dragBox('remote'),
       localPath: s.localPath || '~', remotePath: s.remotePath || '/', sftpHost: activeTab ? activeTab.title : '',
       sftpReady: s.sftpStatus === 'ready', sftpMsg: s.sftpErr || (s.sftpStatus === 'connecting' ? 'Connecting…' : 'Not connected'),
+      sftpMkdir: () => this.sftpMkdirStart(), sftpRename: () => this.sftpRenameStart(), sftpDelete: () => this.sftpDeleteStart(),
+      sftpPrompt: s.sftpPrompt,
+      sftpPromptTitle: s.sftpPrompt ? (s.sftpPrompt.mode === 'mkdir' ? 'New folder' : s.sftpPrompt.mode === 'rename' ? 'Rename' : 'Delete ' + (s.sftpPrompt.names ? s.sftpPrompt.names.length : 0) + ' item(s)?') : '',
+      onSftpPromptValue: (e) => this.setState(st => ({ sftpPrompt: st.sftpPrompt ? { ...st.sftpPrompt, value: e.target.value } : null })),
+      sftpPromptSubmit: () => this.sftpPromptSubmit(), sftpPromptCancel: () => this.sftpPromptCancel(),
       transferActive: !!transfer, transfer,
       conflictOpen: !!s.conflict,
       conflictName: s.conflict ? s.conflict.file.name : '',
@@ -1732,6 +1961,12 @@ export default class App extends React.Component<any, any> {
       deleteHost: () => this.deleteHost(s.editingId),
       fName: f.name, fHost: f.host, fPort: f.port, fUser: f.user,
       fPassword: f.password, fKeyPath: f.keyPath, fKeyText: f.keyText, fPassphrase: f.passphrase, fFolder: f.folder, fTagInput: f.tagInput,
+      fJumpHost: f.jumpHost || '',
+      // Other saved hosts, eligible as a jump (bastion) host for this one.
+      jumpOptions: s.hosts.filter(h => h.id !== s.editingId).map(h => ({ id: h.id, label: (h.name || h.addr) + ' · ' + (h.user || 'root') + '@' + h.addr })),
+      onFJumpHost: (e) => this.setField('jumpHost', e.target.value),
+      fSnippet: f.snippet || '',
+      onFSnippet: (e) => this.setField('snippet', e.target.value),
       fTags: f.tags.map(t => ({ name: t, onRemove: () => this.removeTag(t) })),
       authIsPassword: f.auth === 'password', authIsKey: f.auth === 'key', authIsAgent: f.auth === 'agent',
       authPwStyle: segStyle(f.auth === 'password'), authKeyStyle: segStyle(f.auth === 'key'), authAgentStyle: segStyle(f.auth === 'agent'),
@@ -1782,6 +2017,7 @@ export default class App extends React.Component<any, any> {
       submitLockSet: () => this.hashAndSetLock(this.state.lockPrompt ? this.state.lockPrompt.value : ''),
       cancelLockSet: () => this.setState({ lockPrompt: null }),
       fwdOpen: !!s.fwdPrompt,
+      fwdMode: s.fwdPrompt ? (s.fwdPrompt.mode || 'local') : 'local',
       fwdLocal: s.fwdPrompt ? s.fwdPrompt.localPort : '',
       fwdRemoteHost: s.fwdPrompt ? s.fwdPrompt.remoteHost : '',
       fwdRemotePort: s.fwdPrompt ? s.fwdPrompt.remotePort : '',
@@ -1791,6 +2027,8 @@ export default class App extends React.Component<any, any> {
       submitForward: () => this.submitForward(),
       cancelForward: () => this.setState({ fwdPrompt: null }),
       forwardCount: s.forwards.length,
+      broadcast: s.broadcast,
+      toggleBroadcast: () => this.toggleBroadcast(),
       mcpOpen: s.mcpOpen, mcpRunning: s.mcpRunning, mcpUrl: MCP_URL, mcpToken: s.settings.mcpToken || '',
       mcpLog: s.mcpLog, mcpExposedCount: s.hosts.filter(h => h.agentAllowed).length,
       mcpHosts: s.hosts.map(h => ({ id: h.id, name: h.name, target: h.user + '@' + h.addr, allowed: !!h.agentAllowed, onToggle: () => this.toggleHostAgent(h.id) })),
@@ -1833,7 +2071,7 @@ export default class App extends React.Component<any, any> {
       <div style={{ ...css("position:relative;height:100vh;width:100%;display:flex;flex-direction:column;background:#09090b;color:#ededf0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;overflow:hidden;"), ...v.themeVars }}>
 
         {/* TITLE BAR */}
-        <div data-tauri-drag-region style={css("height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;background:#0a0a0d;border-bottom:1px solid #16161c;")}>
+        <div data-tauri-drag-region style={css("height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;" + (isMac ? "padding-left:80px;" : "") + "background:#0a0a0d;border-bottom:1px solid #16161c;")}>
           <div style={css("display:flex;align-items:center;gap:9px;")}>
             <img src={logoMark} width="20" height="20" alt="SSH Ache" style={{ borderRadius: "6px", boxShadow: "0 0 12px rgba(255,77,112,.45)" }} />
             <span style={css("font-weight:700;font-size:13px;letter-spacing:.01em;color:#f2f2f5;")}>SSH&nbsp;Ache</span>
@@ -1858,6 +2096,7 @@ export default class App extends React.Component<any, any> {
               </svg>
             </Hov>
           </div>
+          {!isMac && (
           <div style={css("display:flex;gap:3px;margin-left:4px;align-items:center;")}>
             <Hov onClick={v.winMin} title="Minimize" s="width:26px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;cursor:pointer;" h="background:#15151b;">
               <span style={css("width:11px;height:1.5px;background:#8b8b95;")}></span>
@@ -1872,6 +2111,7 @@ export default class App extends React.Component<any, any> {
               </span>
             </Hov>
           </div>
+          )}
         </div>
 
         {/* BODY */}
@@ -2065,7 +2305,7 @@ export default class App extends React.Component<any, any> {
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
                         {pane.live ? (
-                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} />
+                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} />
                         ) : (
                         <div style={pane.termStyle}>
                           {pane.lines.map((line, li) => (
@@ -2112,7 +2352,12 @@ export default class App extends React.Component<any, any> {
                         </div>
                         <div onDragOver={v.onDragOver} onDrop={v.onDropRemote} onDragEnter={v.onDragEnterRemote} onDragLeave={v.onDragLeave} style={v.remoteColStyle}>
                           <div style={css("padding:8px 10px;border-bottom:1px solid #16161c;")}>
-                            <div style={css("font-size:9px;letter-spacing:.12em;color:#ff7a59;text-transform:uppercase;")}>Remote · {v.sftpHost}</div>
+                            <div style={css("display:flex;align-items:center;gap:6px;")}>
+                              <div style={css("flex:1;font-size:9px;letter-spacing:.12em;color:#ff7a59;text-transform:uppercase;")}>Remote · {v.sftpHost}</div>
+                              <Hov onClick={v.sftpMkdir} title="New folder" s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border-radius:4px;cursor:pointer;font-size:13px;" h="background:#222;color:#ededf0;">+</Hov>
+                              <Hov onClick={v.sftpRename} title="Rename selected" s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border-radius:4px;cursor:pointer;font-size:11px;" h="background:#222;color:#ededf0;">✎</Hov>
+                              <Hov onClick={v.sftpDelete} title="Delete selected" s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border-radius:4px;cursor:pointer;font-size:12px;" h="background:rgba(255,107,120,.15);color:#ff6b78;">🗑</Hov>
+                            </div>
                             <div style={css("font-size:10.5px;color:#9a9aa3;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.remotePath}</div>
                           </div>
                           <div style={css("flex:1;overflow:auto;padding:5px;")}>
@@ -2153,6 +2398,7 @@ export default class App extends React.Component<any, any> {
               <span>theme · {v.statusTheme}</span>
               <span>{v.statusHost}</span>
               {v.forwardCount > 0 && (<span style={css("color:#46d9a0;")}>⇄ {v.forwardCount} fwd</span>)}
+              {v.broadcast && (<span onClick={v.toggleBroadcast} title="Broadcast input is on — click to turn off" style={css("color:#0c0b0a;background:#ff7a59;border-radius:4px;padding:1px 6px;cursor:pointer;font-weight:600;")}>⇉ broadcast</span>)}
               <span style={css("flex:1;")}></span>
               <span>UTF-8</span>
               <span>LF</span>
@@ -2382,6 +2628,17 @@ export default class App extends React.Component<any, any> {
                       <Hov key={i} onClick={fc.onPick} s="font-size:10.5px;color:#9a9aa3;background:#101015;border:1px solid #20202a;border-radius:6px;padding:4px 9px;cursor:pointer;" h="border-color:rgba(255,122,89,.4);color:#ededf0;">{fc.name}</Hov>
                     ))}
                   </div>
+                </div>
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Jump host <span style={css("text-transform:none;letter-spacing:0;color:#54545e;")}>· optional, connect through a bastion</span></div>
+                  <select value={v.fJumpHost} onChange={v.onFJumpHost} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")}>
+                    <option value="">None — connect directly</option>
+                    {v.jumpOptions.map((jo) => (<option key={jo.id} value={jo.id}>{jo.label}</option>))}
+                  </select>
+                </div>
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>On-connect command <span style={css("text-transform:none;letter-spacing:0;color:#54545e;")}>· optional, runs after the shell opens</span></div>
+                  <Hov as="input" value={v.fSnippet} onChange={v.onFSnippet} placeholder="tmux attach || tmux new" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Tags</div>
@@ -2619,29 +2876,81 @@ export default class App extends React.Component<any, any> {
         {v.fwdOpen && (
           <div onClick={v.cancelForward} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:79;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:470px;max-width:96%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
-              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>Add port forward <span style={css("color:#6a6a74;font-weight:400;")}>(local · -L)</span></div>
+              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>{v.fwdMode === 'socks' ? 'Add dynamic SOCKS proxy' : v.fwdMode === 'remote' ? 'Add remote forward' : 'Add port forward'} <span style={css("color:#6a6a74;font-weight:400;")}>({v.fwdMode === 'socks' ? 'dynamic · -D' : v.fwdMode === 'remote' ? 'remote · -R' : 'local · -L'})</span></div>
               <div style={css("padding:10px 20px 16px;display:flex;flex-direction:column;gap:10px;")}>
-                <div style={css("display:flex;align-items:flex-end;gap:8px;")}>
-                  <div style={css("width:88px;")}>
-                    <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Local port</div>
-                    <input value={v.fwdLocal} onChange={v.onFwdLocal} placeholder="8080" autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
-                  </div>
-                  <span style={css("color:#54545e;padding-bottom:11px;")}>→</span>
-                  <div style={css("flex:1;")}>
-                    <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Remote host</div>
-                    <input value={v.fwdRemoteHost} onChange={v.onFwdRemoteHost} placeholder="127.0.0.1" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
-                  </div>
-                  <span style={css("color:#54545e;padding-bottom:11px;")}>:</span>
-                  <div style={css("width:88px;")}>
-                    <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Remote port</div>
-                    <input value={v.fwdRemotePort} onChange={v.onFwdRemotePort} placeholder="5432" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
-                  </div>
-                </div>
-                <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Connections to <span style={css("color:#9a9aa3;")}>localhost:{v.fwdLocal || '…'}</span> tunnel to <span style={css("color:#9a9aa3;")}>{v.fwdRemoteHost || '…'}:{v.fwdRemotePort || '…'}</span> over this SSH session.</div>
+                {v.fwdMode === 'socks' ? (
+                  <>
+                    <div style={css("width:120px;")}>
+                      <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Local port</div>
+                      <input value={v.fwdLocal} onChange={v.onFwdLocal} placeholder="1080" autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                    </div>
+                    <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Point apps at <span style={css("color:#9a9aa3;")}>socks5h://localhost:{v.fwdLocal || '…'}</span> — each request is tunnelled to its target over this SSH session.</div>
+                  </>
+                ) : v.fwdMode === 'remote' ? (
+                  <>
+                    <div style={css("display:flex;align-items:flex-end;gap:8px;")}>
+                      <div style={css("width:96px;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Remote port</div>
+                        <input value={v.fwdRemotePort} onChange={v.onFwdRemotePort} placeholder="8000" autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                      <span style={css("color:#54545e;padding-bottom:11px;")}>→</span>
+                      <div style={css("flex:1;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Local host</div>
+                        <input value={v.fwdRemoteHost} onChange={v.onFwdRemoteHost} placeholder="127.0.0.1" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                      <span style={css("color:#54545e;padding-bottom:11px;")}>:</span>
+                      <div style={css("width:88px;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Local port</div>
+                        <input value={v.fwdLocal} onChange={v.onFwdLocal} placeholder="3000" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                    </div>
+                    <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>The server listens on <span style={css("color:#9a9aa3;")}>:{v.fwdRemotePort || '…'}</span> and forwards back to <span style={css("color:#9a9aa3;")}>{v.fwdRemoteHost || '…'}:{v.fwdLocal || '…'}</span>. Needs <span style={css("color:#9a9aa3;")}>GatewayPorts</span> on the server for non-localhost binds.</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={css("display:flex;align-items:flex-end;gap:8px;")}>
+                      <div style={css("width:88px;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Local port</div>
+                        <input value={v.fwdLocal} onChange={v.onFwdLocal} placeholder="8080" autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                      <span style={css("color:#54545e;padding-bottom:11px;")}>→</span>
+                      <div style={css("flex:1;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Remote host</div>
+                        <input value={v.fwdRemoteHost} onChange={v.onFwdRemoteHost} placeholder="127.0.0.1" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                      <span style={css("color:#54545e;padding-bottom:11px;")}>:</span>
+                      <div style={css("width:88px;")}>
+                        <div style={css("font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:6px;")}>Remote port</div>
+                        <input value={v.fwdRemotePort} onChange={v.onFwdRemotePort} placeholder="5432" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                      </div>
+                    </div>
+                    <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Connections to <span style={css("color:#9a9aa3;")}>localhost:{v.fwdLocal || '…'}</span> tunnel to <span style={css("color:#9a9aa3;")}>{v.fwdRemoteHost || '…'}:{v.fwdRemotePort || '…'}</span> over this SSH session.</div>
+                  </>
+                )}
               </div>
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.cancelForward} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
-                <Hov as="button" onClick={v.submitForward} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Start forward</Hov>
+                <Hov as="button" onClick={v.submitForward} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">{v.fwdMode === 'socks' ? 'Start proxy' : v.fwdMode === 'remote' ? 'Start remote forward' : 'Start forward'}</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SFTP mkdir / rename / delete */}
+        {v.sftpPrompt && (
+          <div onClick={v.sftpPromptCancel} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:79;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:380px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>{v.sftpPromptTitle}</div>
+              <div style={css("padding:8px 20px 18px;display:flex;flex-direction:column;gap:9px;")}>
+                {v.sftpPrompt.mode === 'delete' ? (
+                  <div style={css("font-size:11.5px;color:#9a9aa3;line-height:1.5;")}>This permanently deletes the selected remote item(s){v.sftpPrompt.names && v.sftpPrompt.names.length ? ': ' : '.'}<span style={css("color:#ededf0;")}>{(v.sftpPrompt.names || []).join(', ')}</span>. Folders are removed recursively.</div>
+                ) : (
+                  <input value={v.sftpPrompt.value || ''} onChange={v.onSftpPromptValue} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); v.sftpPromptSubmit(); } else if (e.key === 'Escape') { v.sftpPromptCancel(); } }} autoFocus spellCheck={false} placeholder={v.sftpPrompt.mode === 'mkdir' ? 'folder name' : 'new name'} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                )}
+              </div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                <Hov as="button" onClick={v.sftpPromptCancel} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
+                <Hov as="button" onClick={v.sftpPromptSubmit} s={"padding:9px 16px;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;background:" + (v.sftpPrompt.mode === 'delete' ? '#ff6b78' : '#ff7a59') + ";"} h={v.sftpPrompt.mode === 'delete' ? 'background:#ff8088;' : 'background:#ff8d70;'}>{v.sftpPrompt.mode === 'delete' ? 'Delete' : v.sftpPrompt.mode === 'mkdir' ? 'Create' : 'Rename'}</Hov>
               </div>
             </div>
           </div>

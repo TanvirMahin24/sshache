@@ -32,10 +32,35 @@ struct Handler {
     // Set by check_server_key when the presented key is unknown or changed, so
     // ssh_connect can surface it to the UI instead of silently trusting it.
     issue: Arc<Mutex<Option<KeyIssue>>>,
+    // For remote forward (-R): the local target each server-initiated forwarded
+    // channel is bridged to. None for every other connection.
+    remote: Option<(String, u16)>,
 }
 
 impl client::Handler for Handler {
     type Error = russh::Error;
+
+    // Remote forward (-R): the server accepted a connection on the forwarded
+    // port and opened this channel to us — bridge it to the local target.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some((lhost, lport)) = self.remote.clone() {
+            tokio::spawn(async move {
+                if let Ok(mut local) = tokio::net::TcpStream::connect((lhost.as_str(), lport)).await {
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut local, &mut stream).await;
+                }
+            });
+        }
+        Ok(())
+    }
 
     // Trust-on-first-use with an interactive confirm (Phase 3):
     //   known host, key matches -> Ok(true)
@@ -143,6 +168,17 @@ fn sort_entries(v: &mut [FileEntry]) {
             .cmp(&(a.kind == "dir"))
             .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+}
+
+// Client config with keepalive so idle sessions don't silently drop (a NAT /
+// firewall idle-timeout otherwise kills long-lived terminals & forwards). 30s
+// ping, give up after 3 unanswered.
+fn ssh_config() -> Arc<client::Config> {
+    Arc::new(client::Config {
+        keepalive_interval: Some(std::time::Duration::from_secs(30)),
+        keepalive_max: 3,
+        ..Default::default()
+    })
 }
 
 // Shared SSH authentication, used by both the terminal and SFTP connections.
@@ -263,6 +299,71 @@ async fn do_auth(
     Ok(())
 }
 
+// A jump (bastion) host the target is reached through (ProxyJump). Its own
+// credentials, resolved from another saved host by the frontend.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Jump {
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+    secret: String,
+    key_path: String,
+    key_text: String,
+}
+
+// Connect (and host-key-check) to `host:port`, directly or tunnelled through a
+// single jump host. Returns the target handle plus the jump handle, which must
+// be kept alive for as long as the target connection lives (drop it and the
+// tunnel closes). The target's unknown/changed-key errors keep the structured
+// UNKNOWN_HOST / KEY_CHANGED form the UI already handles. ponytail: one hop
+// only — the jump host's own ProxyJump is ignored; chain support if anyone asks.
+async fn open_session(
+    host: &str,
+    port: u16,
+    jump: Option<&Jump>,
+) -> Result<(client::Handle<Handler>, Option<client::Handle<Handler>>), String> {
+    let issue = Arc::new(Mutex::new(None));
+    let handler = Handler { host: host.into(), port, issue: issue.clone(), remote: None };
+    let config = ssh_config();
+
+    let (connect_res, jump_handle) = match jump {
+        None => (client::connect(config, (host, port), handler).await, None),
+        Some(j) => {
+            // Bring up the jump host on its own handler so its key is verified
+            // too; we refuse (not auto-trust) an unknown/changed jump key.
+            let jissue = Arc::new(Mutex::new(None));
+            let jhandler = Handler { host: j.host.clone(), port: j.port, issue: jissue.clone(), remote: None };
+            let jres = client::connect(ssh_config(), (j.host.as_str(), j.port), jhandler).await;
+            match jissue.lock().unwrap().take() {
+                Some(KeyIssue::Unknown(fp, _)) => return Err(format!(
+                    "jump host {} is not yet trusted (key {fp}). Open a direct session to it once to verify and trust its key, then retry.", j.host)),
+                Some(KeyIssue::Changed) => return Err(format!(
+                    "jump host {} key CHANGED — possible man-in-the-middle; refusing.", j.host)),
+                None => {}
+            }
+            let mut jsession = jres.map_err(|e| format!("jump connect: {e}"))?;
+            do_auth(&mut jsession, &j.user, &j.auth, &j.secret, &j.key_path, &j.key_text)
+                .await
+                .map_err(|e| format!("jump auth: {e}"))?;
+            let ch = jsession
+                .channel_open_direct_tcpip(host.to_string(), port as u32, "127.0.0.1".to_string(), 0u32)
+                .await
+                .map_err(|e| format!("jump tunnel to {host}:{port}: {e}"))?;
+            (client::connect_stream(config, ch.into_stream(), handler).await, Some(jsession))
+        }
+    };
+    // Structured key errors for the target (\u{1} = field separator).
+    match issue.lock().unwrap().take() {
+        Some(KeyIssue::Unknown(fp, key)) => return Err(format!("UNKNOWN_HOST\u{1}{fp}\u{1}{key}")),
+        Some(KeyIssue::Changed) => return Err("KEY_CHANGED".to_string()),
+        None => {}
+    }
+    let session = connect_res.map_err(|e| format!("connect: {e}"))?;
+    Ok((session, jump_handle))
+}
+
 #[tauri::command]
 async fn ssh_connect(
     state: State<'_, SshState>,
@@ -274,6 +375,7 @@ async fn ssh_connect(
     secret: String,
     key_path: String,
     key_text: String,
+    jump: Option<Jump>,
     cols: u16,
     rows: u16,
     on_data: Channel<Vec<u8>>,
@@ -284,22 +386,7 @@ async fn ssh_connect(
         let _ = tx.send(SshCmd::Close);
     }
 
-    let config = Arc::new(client::Config::default());
-    let issue = Arc::new(Mutex::new(None));
-    let handler = Handler {
-        host: host.clone(),
-        port,
-        issue: issue.clone(),
-    };
-    let connect_res = client::connect(config, (host, port), handler).await;
-    // An aborted handshake from an unknown / changed host key becomes a
-    // structured error the UI parses (\u{1} = field separator).
-    match issue.lock().unwrap().take() {
-        Some(KeyIssue::Unknown(fp, key)) => return Err(format!("UNKNOWN_HOST\u{1}{fp}\u{1}{key}")),
-        Some(KeyIssue::Changed) => return Err("KEY_CHANGED".to_string()),
-        None => {}
-    }
-    let mut session = connect_res.map_err(|e| format!("connect: {e}"))?;
+    let (mut session, jump_handle) = open_session(&host, port, jump.as_ref()).await?;
 
     do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
 
@@ -321,6 +408,7 @@ async fn ssh_connect(
 
     tauri::async_runtime::spawn(async move {
         let _session = session; // keep the connection alive for the task's lifetime
+        let _jump = jump_handle; // keep the jump tunnel open for the same lifetime
         loop {
             tokio::select! {
                 msg = channel.wait() => {
@@ -512,11 +600,12 @@ async fn sftp_connect(
     let prev = state.0.lock().unwrap().remove(&id);
     drop(prev);
 
-    let config = Arc::new(client::Config::default());
+    let config = ssh_config();
     let handler = Handler {
         host: host.clone(),
         port,
         issue: Arc::new(Mutex::new(None)),
+        remote: None,
     };
     let mut session = client::connect(config, (host, port), handler)
         .await
@@ -769,6 +858,50 @@ fn sftp_disconnect(state: State<'_, SftpState>, id: String) {
 }
 
 #[tauri::command]
+async fn sftp_mkdir(state: State<'_, SftpState>, id: String, path: String) -> Result<(), String> {
+    sftp_of(&state, &id)?.create_dir(path).await.map_err(|e| format!("mkdir: {e}"))
+}
+
+#[tauri::command]
+async fn sftp_rename(state: State<'_, SftpState>, id: String, from: String, to: String) -> Result<(), String> {
+    sftp_of(&state, &id)?.rename(from, to).await.map_err(|e| format!("rename: {e}"))
+}
+
+// Delete a remote file, or a directory (recursively — SFTP rmdir refuses a
+// non-empty dir, so walk + remove depth-first).
+#[tauri::command]
+async fn sftp_remove(state: State<'_, SftpState>, id: String, path: String, is_dir: bool) -> Result<(), String> {
+    let sftp = sftp_of(&state, &id)?;
+    if !is_dir {
+        return sftp.remove_file(path).await.map_err(|e| format!("delete: {e}"));
+    }
+    // Post-order walk: collect dirs top-down, delete files as found, then rmdir
+    // dirs bottom-up.
+    let mut stack = vec![path.clone()];
+    let mut dirs: Vec<String> = Vec::new();
+    while let Some(d) = stack.pop() {
+        dirs.push(d.clone());
+        let entries = sftp.read_dir(&d).await.map_err(|e| format!("list {d}: {e}"))?;
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let p = format!("{d}/{name}");
+            if entry.metadata().is_dir() {
+                stack.push(p);
+            } else {
+                sftp.remove_file(&p).await.map_err(|e| format!("delete {p}: {e}"))?;
+            }
+        }
+    }
+    for d in dirs.iter().rev() {
+        sftp.remove_dir(d).await.map_err(|e| format!("rmdir {d}: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn local_list(path: String) -> Result<Vec<FileEntry>, String> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(&path).map_err(|e| format!("list: {e}"))? {
@@ -805,6 +938,19 @@ fn write_file(path: String, data: String) -> Result<(), String> {
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))
+}
+
+// Return ~/.ssh/config verbatim (empty if absent) for the frontend importer to
+// parse. Read-only; never written.
+#[tauri::command]
+fn read_ssh_config() -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let path = std::path::Path::new(&home).join(".ssh").join("config");
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(s),
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("read: {e}")),
+    }
 }
 
 // ---- local shell (PTY) ----
@@ -910,11 +1056,12 @@ async fn forward_start(
     if let Some(h) = state.0.lock().unwrap().remove(&id) {
         h.abort();
     }
-    let config = Arc::new(client::Config::default());
+    let config = ssh_config();
     let handler = Handler {
         host: host.clone(),
         port,
         issue: Arc::new(Mutex::new(None)),
+        remote: None,
     };
     let mut session = client::connect(config, (host, port), handler)
         .await
@@ -957,6 +1104,168 @@ fn forward_stop(state: State<'_, ForwardState>, id: String) {
     if let Some(h) = state.0.lock().unwrap().remove(&id) {
         h.abort();
     }
+}
+
+// ---- dynamic SOCKS proxy (-D): a local SOCKS5 server that tunnels each
+// requested target over the SSH connection via a direct-tcpip channel ----
+
+// Minimal SOCKS5 (CONNECT only, no auth) over one accepted socket. Reads the
+// greeting + request, opens an SSH channel to the requested target, replies
+// success, then bridges. ponytail: no auth, no BIND/UDP — enough to drive a
+// browser/curl `socks5h://127.0.0.1:<port>`.
+async fn handle_socks(mut socket: tokio::net::TcpStream, session: Arc<client::Handle<Handler>>, local_port: u16) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Greeting: VER, NMETHODS, METHODS...
+    let mut head = [0u8; 2];
+    socket.read_exact(&mut head).await.map_err(|e| e.to_string())?;
+    if head[0] != 0x05 {
+        return Err("not SOCKS5".into());
+    }
+    let mut methods = vec![0u8; head[1] as usize];
+    socket.read_exact(&mut methods).await.map_err(|e| e.to_string())?;
+    socket.write_all(&[0x05, 0x00]).await.map_err(|e| e.to_string())?; // no auth
+
+    // Request: VER, CMD, RSV, ATYP, ADDR, PORT
+    let mut req = [0u8; 4];
+    socket.read_exact(&mut req).await.map_err(|e| e.to_string())?;
+    if req[1] != 0x01 {
+        // only CONNECT; reply "command not supported"
+        let _ = socket.write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+        return Err("only CONNECT supported".into());
+    }
+    let dest = match req[3] {
+        0x01 => {
+            let mut a = [0u8; 4];
+            socket.read_exact(&mut a).await.map_err(|e| e.to_string())?;
+            format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
+        }
+        0x03 => {
+            let mut l = [0u8; 1];
+            socket.read_exact(&mut l).await.map_err(|e| e.to_string())?;
+            let mut d = vec![0u8; l[0] as usize];
+            socket.read_exact(&mut d).await.map_err(|e| e.to_string())?;
+            String::from_utf8_lossy(&d).to_string()
+        }
+        0x04 => {
+            let mut a = [0u8; 16];
+            socket.read_exact(&mut a).await.map_err(|e| e.to_string())?;
+            std::net::Ipv6Addr::from(a).to_string()
+        }
+        _ => {
+            let _ = socket.write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+            return Err("bad address type".into());
+        }
+    };
+    let mut pb = [0u8; 2];
+    socket.read_exact(&mut pb).await.map_err(|e| e.to_string())?;
+    let dport = u16::from_be_bytes(pb);
+
+    let ch = match session
+        .channel_open_direct_tcpip(dest.clone(), dport as u32, "127.0.0.1".to_string(), local_port as u32)
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            // "host unreachable"
+            let _ = socket.write_all(&[0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+            return Err(format!("open {dest}:{dport}: {e}"));
+        }
+    };
+    // Success — bound address reported as 0.0.0.0:0 (clients ignore it).
+    socket.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await.map_err(|e| e.to_string())?;
+    let mut stream = ch.into_stream();
+    let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn socks_start(
+    state: State<'_, ForwardState>,
+    id: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+    secret: String,
+    key_path: String,
+    key_text: String,
+    local_port: u16,
+) -> Result<(), String> {
+    if let Some(h) = state.0.lock().unwrap().remove(&id) {
+        h.abort();
+    }
+    let handler = Handler { host: host.clone(), port, issue: Arc::new(Mutex::new(None)), remote: None };
+    let mut session = client::connect(ssh_config(), (host, port), handler)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+    do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
+    let session = Arc::new(session);
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", local_port))
+        .await
+        .map_err(|e| format!("bind 127.0.0.1:{local_port}: {e}"))?;
+
+    let task = tauri::async_runtime::spawn(async move {
+        let session = session;
+        loop {
+            let (socket, _) = match listener.accept().await {
+                Ok(x) => x,
+                Err(_) => break,
+            };
+            let session = session.clone();
+            tokio::spawn(async move {
+                let _ = handle_socks(socket, session, local_port).await;
+            });
+        }
+    });
+    state.0.lock().unwrap().insert(id, task);
+    Ok(())
+}
+
+// ---- remote forward (-R): ask the server to listen on remote_port and bridge
+// each connection back to local_host:local_port (handled in the Handler) ----
+
+#[tauri::command]
+async fn remote_forward_start(
+    state: State<'_, ForwardState>,
+    id: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+    secret: String,
+    key_path: String,
+    key_text: String,
+    remote_port: u16,
+    local_host: String,
+    local_port: u16,
+) -> Result<(), String> {
+    if let Some(h) = state.0.lock().unwrap().remove(&id) {
+        h.abort();
+    }
+    let handler = Handler {
+        host: host.clone(),
+        port,
+        issue: Arc::new(Mutex::new(None)),
+        remote: Some((local_host, local_port)),
+    };
+    let mut session = client::connect(ssh_config(), (host, port), handler)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+    do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
+    session
+        .tcpip_forward("0.0.0.0", remote_port as u32)
+        .await
+        .map_err(|e| format!("remote forward request (server may forbid GatewayPorts): {e}"))?;
+
+    // Hold the session open; the Handler bridges forwarded channels. Aborting
+    // the task drops the session, which tears down the remote listener.
+    let task = tauri::async_runtime::spawn(async move {
+        let _session = session;
+        std::future::pending::<()>().await;
+    });
+    state.0.lock().unwrap().insert(id, task);
+    Ok(())
 }
 
 // ---- MCP server (local, opt-in, approval-gated) ----
@@ -1013,8 +1322,8 @@ async fn mcp_ssh_exec(host: &serde_json::Value, blob: &str, command: &str) -> Re
     } else {
         (sb["password"].as_str().unwrap_or("").to_string(), String::new())
     };
-    let config = Arc::new(client::Config::default());
-    let handler = Handler { host: addr.clone(), port, issue: Arc::new(Mutex::new(None)) };
+    let config = ssh_config();
+    let handler = Handler { host: addr.clone(), port, issue: Arc::new(Mutex::new(None)), remote: None };
     let mut session = client::connect(config, (addr, port), handler)
         .await
         .map_err(|e| format!("connect: {e}"))?;
@@ -1214,16 +1523,22 @@ fn main() {
             sftp_put_dir,
             sftp_get_dir,
             sftp_disconnect,
+            sftp_mkdir,
+            sftp_rename,
+            sftp_remove,
             local_list,
             local_home,
             write_file,
             read_file,
+            read_ssh_config,
             pty_spawn,
             pty_write,
             pty_resize,
             pty_close,
             forward_start,
             forward_stop,
+            socks_start,
+            remote_forward_start,
             mcp_start,
             mcp_stop,
             mcp_status,

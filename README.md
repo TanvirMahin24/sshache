@@ -27,8 +27,12 @@
 - 💻 **Real terminal** — full SSH sessions (russh + xterm.js), tabbed, with splittable panes, plus local shell tabs.
 - 🗂️ **Host vault** — saved hosts organised in folders with colours and favourites; secrets stored in the OS keychain; copy a ready-to-run `ssh` command for any host.
 - 🔐 **Host-key verification** — first-connect fingerprint confirmation, `known_hosts` tracking, and a hard refusal with a warning if a host key ever changes (MITM protection).
-- 📁 **SFTP browser** — dual-pane local/remote navigation with drag-and-drop transfer of multiple files and whole folders, and a replace/skip conflict prompt.
-- 🔀 **Port forwarding** — local forwards bridged over the SSH connection.
+- 📁 **SFTP browser** — dual-pane local/remote navigation with drag-and-drop transfer of multiple files and whole folders, a replace/skip conflict prompt, and remote create-folder / rename / delete.
+- 🔀 **Port forwarding & SOCKS** — local (`-L`), remote (`-R`), and a dynamic SOCKS5 proxy (`-D`), all over the SSH connection. Keepalive keeps idle tunnels alive.
+- 🛫 **Jump hosts (ProxyJump)** — reach a host through a saved bastion; the jump host's key is verified too.
+- 📥 **Import `~/.ssh/config`** — pull existing hosts (and their ProxyJump links) straight into the vault.
+- 📡 **Broadcast input** — type once, send to every split pane in a tab (cluster-ssh).
+- 🔎 **Find & on-connect commands** — `⌘F` searches the terminal scrollback; each host can run a saved command (e.g. `tmux attach`) the moment the shell opens.
 - 🎨 **Themes & settings** — community terminal themes with live font size, cursor, and scrollback controls.
 - 💾 **Encrypted backup** — export and import your hosts and secrets as a password-encrypted file (PBKDF2 → AES-256-GCM).
 - ⏳ **Idle vault lock** — optional passphrase lock after a period of inactivity.

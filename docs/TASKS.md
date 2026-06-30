@@ -178,6 +178,65 @@ Active forwards show in the status bar (`⇄ N fwd`) and stop when the session t
 closes or via "Stop port forwards". Verified by compile + palette wiring; live
 tunnels run in `npm run tauri dev`.
 
+## ProxyJump (bastion) + ~/.ssh/config import + broadcast input
+Three follow-on features, all behind the existing connect/host plumbing.
+
+- **ProxyJump** — a host can pick another saved host as its **Jump host** (Add/Edit
+  form). `ssh_connect` takes an optional `jump`; `open_session` brings up the jump
+  host on its own handler (its key is verified too — unknown/changed jump key is
+  *refused*, not auto-trusted), opens a `direct-tcpip` channel to the target, and
+  runs the target session over it via `client::connect_stream`. The jump handle is
+  kept alive alongside the target in the IO task. Target key errors keep the same
+  `UNKNOWN_HOST` / `KEY_CHANGED` structured form, so the existing confirm modal
+  still works. One hop only (the jump host's own jumpHost is ignored). SFTP /
+  forwards still connect directly — wire jump there later if wanted.
+- **Import ~/.ssh/config** — palette → "Import from ~/.ssh/config". Backend
+  `read_ssh_config` returns the file; `parseSshConfig` (in `App.tsx`) maps Host
+  blocks → hosts (skips wildcard patterns), defaults auth to `key` when an
+  IdentityFile is set else `agent`, dedups by `user@addr:port`, and links
+  `ProxyJump` to a matching host by alias/name. Imported hosts land in an
+  "Imported" folder, tagged `ssh-config`.
+- **Broadcast input** — palette → "Broadcast input to all panes" (status-bar badge
+  while on). When on, a keystroke in any pane of the active tab is fanned to every
+  live pane in that tab (cluster-ssh) via `broadcastInput`. Scoped to the active
+  tab; click the badge to turn off.
+
+Verified: `cargo check` + `npm run build` pass; the parser has a self-check
+(wildcard skip + ProxyJump alias resolution). Live tunnel / fan-out need
+`npm run tauri dev`.
+
+## Follow-on batch — secrets, keepalive, search, snippets, SFTP ops, -D/-R, cwd
+All additive; the working paths above are untouched.
+
+- **Per-OS keyring** — `Cargo.toml` now picks the native keychain backend per
+  platform (`apple-native` / `windows-native` / `sync-secret-service`). The
+  0600 `secrets.json` is still the primary store, so this just restores the
+  best-effort OS-keychain mirror on Windows/Linux.
+- **Keepalive** — `ssh_config()` sets `keepalive_interval: 30s`, `keepalive_max: 3`
+  on every connection, so NAT/firewall idle-timeouts stop killing live tunnels &
+  terminals. (True auto-reconnect-on-drop is still a TODO — keepalive only.)
+- **Scrollback search (⌘F)** — `@xterm/addon-search` + an in-pane find bar
+  (Enter / ⇧Enter / Esc). `attachCustomKeyEventHandler` swallows ⌘F so the shell
+  never sees it.
+- **On-connect command** — host form field `snippet`; `TermPane` writes it once
+  after the shell opens.
+- **SFTP create-folder / rename / delete** — backend `sftp_mkdir` / `sftp_rename`
+  / `sftp_remove` (recursive for dirs); remote-panel header buttons + a small
+  prompt/confirm modal.
+- **Dynamic SOCKS (-D)** — `socks_start` runs a minimal SOCKS5 server
+  (CONNECT, no auth) bridging each target over a `direct-tcpip` channel.
+- **Remote forward (-R)** — `remote_forward_start` calls `tcpip_forward`; the
+  `Handler` gained a `remote: Option<(host, port)>` and a
+  `server_channel_open_forwarded_tcpip` impl that bridges forwarded channels to
+  the local target. Both reuse `ForwardState`/`forward_stop` and a shared
+  3-mode forward dialog/palette.
+- **Live cwd (OSC 7)** — `TermPane` registers an OSC-7 handler → `setPaneCwd`
+  updates the pane header; shells that don't emit it keep the static `~`.
+
+Verified: `cargo check` + `npm run build` pass; landing page rendered & all 13
+feature cards confirmed in the DOM. SOCKS/-R/SFTP live paths need
+`npm run tauri dev`.
+
 ## Notes
 - `src/App.tsx` is `@ts-nocheck` — a faithful port of the untyped prototype.
   Type it incrementally as each phase replaces demo logic with real calls.

@@ -17,7 +17,15 @@ russh = "0.61"
 russh-sftp = "2"
 portable-pty = "0.8"
 tiny_http = "0.12"
+
+# OS keychain mirror — per-platform native backend (the primary store is the
+# 0600 secrets.json, so this is best-effort everywhere).
+[target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 [profile.release]
 opt-level = "s"
