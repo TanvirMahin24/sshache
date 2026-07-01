@@ -237,6 +237,19 @@ Verified: `cargo check` + `npm run build` pass; landing page rendered & all 13
 feature cards confirmed in the DOM. SOCKS/-R/SFTP live paths need
 `npm run tauri dev`.
 
+## Output triggers
+Settings → Output triggers: add a regex; matching output lines get a coloured
+gutter marker and/or an in-app notification. `TermPane` scans the output channel
+(both SSH and local PTY) with a rolling line buffer + ANSI strip, tests each
+completed line against the compiled regexes (cached, case-insensitive), and on a
+match registers an xterm decoration and/or calls back to a throttled toast (one
+per trigger per 4s). Triggers live in the persisted `settings.triggers` array.
+ponytail: the highlight marker sits at the cursor line, so on a multi-line write
+it can land a row below the match — the toast carries the exact line. Desktop
+(OS-level) notifications are a later add; in-app toast for now. Verified:
+`npm run build` + a node self-check (ANSI strip, cross-chunk match, partial-hold,
+CRLF) + the Settings UI exercised in the browser preview (add / toggle / remove).
+
 ## Notes
 - `src/App.tsx` is `@ts-nocheck` — a faithful port of the untyped prototype.
   Type it incrementally as each phase replaces demo logic with real calls.

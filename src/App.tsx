@@ -304,7 +304,7 @@ const cursorStyleOf = (c: string) => (c === "bar" ? "bar" : c === "underline" ? 
 // A live SSH pane: a real xterm.js terminal wired to the russh backend over a
 // per-pane sessionId. Created once on mount; disconnected + disposed on unmount.
 // In a plain browser (no Tauri runtime) it shows a hint instead of connecting.
-function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register, isBroadcast, onBroadcast, onCwd }: any) {
+function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register, isBroadcast, onBroadcast, onCwd, getTriggers, onTrigger }: any) {
   const wrapRef = React.useRef<any>(null);
   const inst = React.useRef<any>(null);
   const searchRef = React.useRef<any>(null);
@@ -351,6 +351,57 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       });
     } catch (_) {}
 
+    // ---- output triggers: test regexes against completed output lines, then
+    // notify (App toast) and/or drop a coloured gutter marker on the line.
+    const td = new TextDecoder();
+    let lineBuf = "";
+    const reCache = new Map<string, any>();
+    const lastFire: any = {};
+    const stripAnsi = (str: string) => str
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC ... BEL/ST
+      .replace(/\x1b[@-Z\\-_]|\x1b\[[0-9;?]*[ -\/]*[@-~]/g, ""); // CSI / others
+    const compile = (t: any) => {
+      const key = t.pattern + " " + (t.flags || "i");
+      if (!reCache.has(key)) { let re = null; try { re = new RegExp(t.pattern, t.flags || "i"); } catch (_) {} reCache.set(key, re); }
+      return reCache.get(key);
+    };
+    const scan = (bytes: Uint8Array) => {
+      const list = getTriggers ? getTriggers() : null;
+      if (!list || !list.length) { lineBuf = ""; return; }
+      lineBuf += stripAnsi(td.decode(bytes, { stream: true }));
+      if (lineBuf.length > 8192) lineBuf = lineBuf.slice(-8192); // cap progress-bar spam (\r only)
+      const parts = lineBuf.split(/\r?\n/);
+      lineBuf = parts.pop() || "";
+      for (const raw of parts) {
+        const line = raw.replace(/\r/g, "");
+        if (!line) continue;
+        for (const t of list) {
+          const re = compile(t);
+          if (!re) continue;
+          try { re.lastIndex = 0; if (!re.test(line)) continue; } catch (_) { continue; }
+          if (t.highlight !== false) {
+            // ponytail: marker sits at the cursor line, so on a multi-line chunk
+            // it can land a row or two below the match — the toast has the exact line.
+            try {
+              const marker = term.registerMarker(0);
+              if (marker) {
+                const dec = term.registerDecoration({ marker, width: term.cols });
+                dec && dec.onRender && dec.onRender((el: any) => {
+                  el.style.width = "100%"; el.style.pointerEvents = "none"; el.style.boxSizing = "border-box";
+                  el.style.background = "rgba(255,255,255,.05)";
+                  el.style.borderLeft = "3px solid " + (t.color || "#ff7a59");
+                });
+              }
+            } catch (_) {}
+          }
+          if (t.notify !== false && onTrigger) {
+            const now = Date.now();
+            if (!lastFire[t.id] || now - lastFire[t.id] > 4000) { lastFire[t.id] = now; onTrigger(t, line, session); }
+          }
+        }
+      }
+    };
+
     const h = session.host || {};
     const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     if (!isTauri) {
@@ -363,7 +414,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
 
     if (session.kind === "local") {
       const onDataL = new Channel<number[]>();
-      onDataL.onmessage = (m) => term.write(new Uint8Array(m));
+      onDataL.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); };
       const onCloseL = new Channel<string>();
       onCloseL.onmessage = () => { term.writeln("\r\n\x1b[90m— shell exited —\x1b[0m"); if (onClosed) onClosed(); };
       invoke("pty_spawn", { id: session.sessionId, cols: term.cols, rows: term.rows, onData: onDataL, onClose: onCloseL })
@@ -387,7 +438,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
 
     term.writeln(`\x1b[90m→ connecting ${h.user || ""}@${h.addr}:${h.port || 22}…\x1b[0m`);
     const onData = new Channel<number[]>();
-    onData.onmessage = (m) => term.write(new Uint8Array(m));
+    onData.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); };
     const onClose = new Channel<string>();
     onClose.onmessage = () => { term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m"); if (onClosed) onClosed(); };
 
@@ -508,6 +559,22 @@ export default class App extends React.Component<any, any> {
   };
   toggleBroadcast = () => this.setState(s => ({ broadcast: !s.broadcast, paletteOpen: false }));
 
+  // ---- output triggers ----
+  getTriggers = () => (this.state.settings && this.state.settings.triggers) || [];
+  handleTrigger = (t, line, session) => {
+    const where = (session && (session.host?.name || session.hostName)) || 'terminal';
+    this.pushToast({ type: 'info', title: 'Trigger · ' + (t.label || t.pattern), msg: where + ': ' + line.trim().slice(0, 80) });
+  };
+  addTrigger = (pattern, color) => {
+    const p = (pattern || '').trim();
+    if (!p) return;
+    try { new RegExp(p); } catch (e) { this.pushToast({ type: 'err', title: 'Bad pattern', msg: String(e).replace(/^.*?:/, '').trim() }); return; }
+    const t = { id: this.genId(), pattern: p, flags: 'i', color: color || '#ff7a59', notify: true, highlight: true };
+    this.setState(s => ({ settings: { ...s.settings, triggers: [...(s.settings.triggers || []), t] } }));
+  };
+  removeTrigger = (id) => this.setState(s => ({ settings: { ...s.settings, triggers: (s.settings.triggers || []).filter(t => t.id !== id) } }));
+  toggleTriggerField = (id, field) => this.setState(s => ({ settings: { ...s.settings, triggers: (s.settings.triggers || []).map(t => t.id === id ? { ...t, [field]: !t[field] } : t) } }));
+
   // Live cwd from OSC 7 → pane header.
   setPaneCwd = (sessionId, cwd) => {
     if (!cwd) return;
@@ -576,7 +643,7 @@ export default class App extends React.Component<any, any> {
     newHostId: null,
     hosts: [],
     form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
-    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false },
+    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[] },
     activeTabId: 't1',
     activePaneId: 'p1',
     connecting: null,
@@ -607,6 +674,7 @@ export default class App extends React.Component<any, any> {
     sftpStatus: 'idle', // idle | connecting | ready | error
     sftpErr: '',
     sftpPrompt: null, // null | { mode:'mkdir'|'rename'|'delete', ... }
+    triggerDraft: '', triggerColor: '#ff7a59', // output-trigger add form
     conflict: null,
     conflictAll: false,
     conflictPolicy: null, // null | 'replace' | 'skip' (set by "Apply to all")
@@ -1605,6 +1673,7 @@ export default class App extends React.Component<any, any> {
         onClosed: () => this.handlePaneClosed(tab, p.id),
         onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
         onCwd: (path) => this.setPaneCwd(p.sessionId, path),
+        onTrigger: this.handleTrigger,
         boxStyle: { position:'relative', flexGrow:flex, flexShrink:1, flexBasis:0, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(255,122,89,.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.12)' : 'none', transition:'border-color .15s ease' },
         resizerStyle: tlayout === 'row'
           ? { flex:'none', alignSelf:'stretch', width:'10px', cursor:'col-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 }
@@ -2002,6 +2071,14 @@ export default class App extends React.Component<any, any> {
       cursorBlockStyle: segStyle(st.cursor === 'block'), cursorBarStyle: segStyle(st.cursor === 'bar'), cursorUnderStyle: segStyle(st.cursor === 'underline'),
       setCursorBlock: () => this.setSetting('cursor', 'block'), setCursorBar: () => this.setSetting('cursor', 'bar'), setCursorUnder: () => this.setSetting('cursor', 'underline'),
       scrollback: st.scrollback, onScrollback: (e) => this.setSetting('scrollback', e.target.value),
+      triggers: st.triggers || [],
+      triggerDraft: s.triggerDraft, triggerColor: s.triggerColor,
+      onTriggerDraft: (e) => this.setState({ triggerDraft: e.target.value }),
+      onTriggerColor: (e) => this.setState({ triggerColor: e.target.value }),
+      addTrigger: () => { this.addTrigger(this.state.triggerDraft, this.state.triggerColor); this.setState({ triggerDraft: '' }); },
+      removeTrigger: (id) => this.removeTrigger(id),
+      toggleTriggerNotify: (id) => this.toggleTriggerField(id, 'notify'),
+      toggleTriggerHighlight: (id) => this.toggleTriggerField(id, 'highlight'),
       confirmCloseTrack: toggleTrackStyle(st.confirmClose), confirmCloseKnob: toggleKnobStyle(st.confirmClose), toggleConfirmClose: () => this.setSetting('confirmClose', !st.confirmClose),
       restoreTabsTrack: toggleTrackStyle(st.restoreTabs), restoreTabsKnob: toggleKnobStyle(st.restoreTabs), toggleRestoreTabs: () => this.setSetting('restoreTabs', !st.restoreTabs),
       lockIdleTrack: toggleTrackStyle(st.lockIdle), lockIdleKnob: toggleKnobStyle(st.lockIdle),
@@ -2305,7 +2382,7 @@ export default class App extends React.Component<any, any> {
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
                         {pane.live ? (
-                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} />
+                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} />
                         ) : (
                         <div style={pane.termStyle}>
                           {pane.lines.map((line, li) => (
@@ -2707,6 +2784,29 @@ export default class App extends React.Component<any, any> {
                   <div style={css("display:flex;align-items:center;gap:12px;")}>
                     <span style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Scrollback (lines)</span>
                     <Hov as="input" value={v.scrollback} onChange={v.onScrollback} s="width:120px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:6px;")}>Output triggers</div>
+                  <div style={css("font-size:10.5px;color:#54545e;margin-bottom:12px;line-height:1.5;")}>Watch terminal output for a regular expression. Matching lines get a coloured marker and/or a notification.</div>
+                  {v.triggers.length > 0 && (
+                    <div style={css("display:flex;flex-direction:column;gap:7px;margin-bottom:12px;")}>
+                      {v.triggers.map((t) => (
+                        <div key={t.id} style={css("display:flex;align-items:center;gap:9px;padding:8px 10px;background:#0e0e12;border:1px solid #1c1c24;border-radius:8px;")}>
+                          <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: t.color || '#ff7a59', flex: 'none' }}></span>
+                          <code style={css("flex:1;font-size:11.5px;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{t.pattern}</code>
+                          <Hov onClick={() => v.toggleTriggerNotify(t.id)} title="Notification on match" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.notify !== false ? 'rgba(255,122,89,.5);color:#ff7a59;background:rgba(255,122,89,.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(255,122,89,.6);">🔔 Notify</Hov>
+                          <Hov onClick={() => v.toggleTriggerHighlight(t.id)} title="Highlight the matching line" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.highlight !== false ? 'rgba(255,122,89,.5);color:#ff7a59;background:rgba(255,122,89,.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(255,122,89,.6);">▎Highlight</Hov>
+                          <Hov onClick={() => v.removeTrigger(t.id)} title="Remove" s="width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border-radius:5px;cursor:pointer;flex:none;" h="background:rgba(255,107,120,.15);color:#ff6b78;">×</Hov>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={css("display:flex;align-items:center;gap:8px;")}>
+                    <Hov as="input" value={v.triggerDraft} onChange={v.onTriggerDraft} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); v.addTrigger(); } }} placeholder="Pattern, e.g.  error|fatal|panic" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <input type="color" value={v.triggerColor} onChange={v.onTriggerColor} title="Marker colour" style={css("width:30px;height:32px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:2px;cursor:pointer;")} />
+                    <Hov as="button" onClick={v.addTrigger} s="padding:8px 14px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;flex:none;" h="background:#ff8d70;">Add</Hov>
                   </div>
                 </div>
 
