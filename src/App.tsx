@@ -1317,7 +1317,7 @@ export default class App extends React.Component<any, any> {
     const id = tab.id + ':sftp';
     const h = pane.host;
     this.setState({ sftpStatus: 'connecting', sftpErr: '', sftpId: id, localFiles: [], remoteFiles: [], conflict: null, conflictAll: false, conflictPolicy: null });
-    invoke('sftp_connect', { id, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth || 'password', secret: pane.secret || '', keyPath: h.keyPath || '' })
+    invoke('sftp_connect', { id, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth || 'password', secret: pane.secret || '', keyPath: h.keyPath || '', keyText: pane.keyText || '', jump: pane.jump || null })
       .then(async (home) => {
         const lhome = await invoke('local_home');
         this.setState({ sftpStatus: 'ready', remotePath: home, localPath: lhome });
@@ -2059,7 +2059,12 @@ export default class App extends React.Component<any, any> {
       onFFolder: (e) => this.setField('folder', e.target.value),
       onFTagInput: (e) => this.setField('tagInput', e.target.value),
       onFTagKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.addTagFromInput(); } },
-      onBrowseKey: () => this.setField('keyPath', '~/.ssh/id_ed25519'),
+      onBrowseKey: async () => {
+        if (!isTauri) { this.setField('keyPath', '~/.ssh/id_ed25519'); return; }
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const p = await open({ multiple: false, title: 'Choose SSH private key', defaultPath: '~/.ssh' });
+        if (typeof p === 'string') this.setField('keyPath', p);
+      },
       folderChips: folderNames.map(name => ({ name, onPick: () => this.setField('folder', name) })),
       saveHost: () => this.saveHost(), canSaveHost,
       saveHostStyle: { padding:'10px 20px', borderRadius:'8px', border:'none', font:'inherit', fontSize:'12.5px', fontWeight:'600', cursor: canSaveHost ? 'pointer' : 'not-allowed', color:'#0c0b0a', background: canSaveHost ? '#ff7a59' : '#3a3024', opacity: canSaveHost ? '1' : '.55' },

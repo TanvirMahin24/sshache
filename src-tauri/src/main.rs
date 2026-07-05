@@ -110,7 +110,9 @@ struct FileEntry {
 // russh Handle across the IO task — simpler; reuse the session later if the
 // extra connection ever matters.
 #[derive(Default)]
-struct SftpState(Mutex<HashMap<String, (Arc<SftpSession>, client::Handle<Handler>)>>);
+// Value: (sftp session, target handle, optional jump handle). The handles are
+// kept only to stay alive — drop the jump handle and its tunnel closes.
+struct SftpState(Mutex<HashMap<String, (Arc<SftpSession>, client::Handle<Handler>, Option<client::Handle<Handler>>)>>);
 
 // Local shell (Phase: "New tab") — a real PTY per local tab.
 struct PtySlot {
@@ -143,7 +145,7 @@ fn sftp_of(state: &SftpState, id: &str) -> Result<Arc<SftpSession>, String> {
         .lock()
         .unwrap()
         .get(id)
-        .map(|(s, _)| s.clone())
+        .map(|t| t.0.clone())
         .ok_or_else(|| "SFTP not connected".to_string())
 }
 
@@ -202,7 +204,7 @@ async fn do_auth(
                     .strip_prefix("~/")
                     .map(|rest| format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest))
                     .unwrap_or_else(|| key_path.to_string());
-                load_secret_key(path, pass).map_err(|e| format!("load key: {e}"))?
+                load_secret_key(&path, pass).map_err(|e| format!("load key {path}: {e}"))?
             };
             let hash = session
                 .best_supported_rsa_hash()
@@ -595,22 +597,17 @@ async fn sftp_connect(
     auth: String,
     secret: String,
     key_path: String,
+    key_text: String,
+    jump: Option<Jump>,
 ) -> Result<String, String> {
     // Drop any previous SFTP session reusing this id.
     let prev = state.0.lock().unwrap().remove(&id);
     drop(prev);
 
-    let config = ssh_config();
-    let handler = Handler {
-        host: host.clone(),
-        port,
-        issue: Arc::new(Mutex::new(None)),
-        remote: None,
-    };
-    let mut session = client::connect(config, (host, port), handler)
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
-    do_auth(&mut session, &user, &auth, &secret, &key_path, "").await?;
+    // Same path as the terminal: host-key verification, jump-host tunnelling,
+    // and full auth (password / key file / pasted key text / agent).
+    let (mut session, jump_handle) = open_session(&host, port, jump.as_ref()).await?;
+    do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
 
     let channel = session
         .channel_open_session()
@@ -627,7 +624,7 @@ async fn sftp_connect(
         .canonicalize(".")
         .await
         .unwrap_or_else(|_| "/".to_string());
-    state.0.lock().unwrap().insert(id, (Arc::new(sftp), session));
+    state.0.lock().unwrap().insert(id, (Arc::new(sftp), session, jump_handle));
     Ok(home)
 }
 
