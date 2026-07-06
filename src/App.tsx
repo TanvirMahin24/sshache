@@ -10,6 +10,7 @@
 // It gets typed phase by phase as demo logic is replaced with real backend
 // calls; typing it now would be churn against code that is about to change.
 import * as React from "react";
+import TeamsPanel from "./teams/TeamsPanel";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
@@ -643,7 +644,7 @@ export default class App extends React.Component<any, any> {
     newHostId: null,
     hosts: [],
     form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
-    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[] },
+    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsApiUrl:'', teamsEmail:'' },
     activeTabId: 't1',
     activePaneId: 'p1',
     connecting: null,
@@ -696,6 +697,7 @@ export default class App extends React.Component<any, any> {
     super(props);
     const d = this._loadSync();
     if (d) this.state = { ...this.state, ...this._merge(this.state, d) };
+    this._bumpUid(this.state.hosts);
   }
   _loadSync() {
     try {
@@ -712,6 +714,13 @@ export default class App extends React.Component<any, any> {
       folderMeta: (d.folderMeta && typeof d.folderMeta === 'object') ? d.folderMeta : base.folderMeta,
       tourSeen: typeof d.tourSeen === 'boolean' ? d.tourSeen : base.tourSeen,
     };
+  }
+  // uid resets to 100 on every launch, but host ids ('x'+uid) are persisted — advance past the
+  // hydrated ids so genId() never reissues an existing id. Without this, a new/imported host
+  // collides with a saved one and secretSet(id) overwrites the WRONG host's keychain slot.
+  _bumpUid(hosts) {
+    const nums = (hosts || []).map((h) => parseInt(String((h && h.id) || '').replace(/^x/, ''), 10)).filter((n) => Number.isFinite(n));
+    if (nums.length) this.uid = Math.max(this.uid, ...nums);
   }
 
   componentDidMount() {
@@ -738,7 +747,7 @@ export default class App extends React.Component<any, any> {
       if (!raw) return;
       let d;
       try { d = JSON.parse(raw); } catch (e) { return; }
-      this.setState(s => this._merge(s, d), () => this.maybeRestore(d));
+      this.setState(s => this._merge(s, d), () => { this._bumpUid(this.state.hosts); this.maybeRestore(d); });
     });
     // Idle vault-lock: lock after 15 min of no interaction when enabled + set.
     this._lastActivity = Date.now();
@@ -1399,6 +1408,26 @@ export default class App extends React.Component<any, any> {
     if (secret) secretSet(id, secret);
     setTimeout(() => this.setState((s) => (s.newHostId === id ? { newHostId: null } : {})), 2200);
   }
+  // Persist the Teams sign-in convenience fields (server URL + email). Never the password.
+  rememberTeams(apiUrl, email) {
+    this.setState((s) => ({ settings: { ...s.settings, teamsApiUrl: apiUrl, teamsEmail: email } }));
+  }
+  // Import a decrypted team connection into the local host list. Stays on the Teams view so
+  // several can be imported in a row; re-importing the same host (same folder/addr/user/port)
+  // updates it in place. The credential goes to the OS keychain, keyed by the new host id.
+  importTeamHost({ meta, secret, teamName }) {
+    const folder = 'Team · ' + (teamName || 'Shared');
+    const addr = meta.host, user = meta.user || 'root', port = String(meta.port || 22);
+    const existing = this.state.hosts.find((h) => h.addr === addr && h.user === user && String(h.port) === port && h.folder === folder);
+    const id = existing ? existing.id : this.genId();
+    const auth = meta.auth === 'key' ? 'key' : meta.auth === 'agent' ? 'agent' : 'password';
+    const host = { id, name: meta.name, addr, port, user, auth, keyMode: secret && secret.keyText ? 'text' : 'file', keyPath: '', folder, tags: ['team'], jumpHost: '', snippet: '', online: true, lastUsed: 'never' };
+    this.setState((s) => ({ hosts: existing ? s.hosts.map((h) => (h.id === id ? host : h)) : [...s.hosts, host] }));
+    const sec = {};
+    if (secret) { if (secret.password) sec.password = secret.password; if (secret.passphrase) sec.passphrase = secret.passphrase; if (secret.keyText) sec.keyText = secret.keyText; }
+    if (Object.keys(sec).length) secretSet(id, sec);
+    this.pushToast({ type: 'ok', title: existing ? 'Updated from Teams' : 'Imported from Teams', msg: meta.name });
+  }
   // Import hosts from ~/.ssh/config. Dedups against the vault by user@addr:port;
   // links ProxyJump to a matching host by alias/name (added or pre-existing).
   async importSshConfig() {
@@ -2003,6 +2032,10 @@ export default class App extends React.Component<any, any> {
       navTermStyle: folderItemStyle(s.view === 'workspace'),
       goDashboard: () => this.setView('dashboard'),
       goTerminal: () => this.setView('workspace'),
+      isTeams: s.view === 'teams',
+      navTeamsStyle: folderItemStyle(s.view === 'teams'),
+      goTeams: () => this.setView('teams'),
+      teamsDefaults: { apiUrl: s.settings.teamsApiUrl || '', email: s.settings.teamsEmail || '' },
 
       // dashboard
       allFolder, folders, allTags, groups,
@@ -2212,6 +2245,10 @@ export default class App extends React.Component<any, any> {
                   <span style={css("flex:1;")}>Terminal</span>
                   <span style={css("font-size:9.5px;color:#54545e;border:1px solid #20202a;border-radius:9px;padding:1px 6px;")}>{v.sessionCount}</span>
                 </div>
+                <div onClick={v.goTeams} style={v.navTeamsStyle}>
+                  <span style={css("font-size:12px;flex:none;width:16px;text-align:center;color:#6ea8ff;")}>◈</span>
+                  <span style={css("flex:1;")}>Teams</span>
+                </div>
               </div>
               <div style={css("flex:1;overflow:auto;padding:6px 10px 8px;")}>
                 <div style={css("font-size:9px;letter-spacing:.14em;color:#46464f;text-transform:uppercase;padding:11px 8px 6px;")}>Folders</div>
@@ -2238,6 +2275,18 @@ export default class App extends React.Component<any, any> {
 
           {/* MAIN */}
           <div style={css("flex:1;min-width:0;display:flex;flex-direction:column;")}>
+
+            {/* TEAMS */}
+            {v.isTeams && (
+              <div style={css("flex:1;min-height:0;overflow:auto;padding:24px;")}>
+                <TeamsPanel
+                  isTauri={isTauri}
+                  defaults={v.teamsDefaults}
+                  onRemember={(apiUrl, email) => this.rememberTeams(apiUrl, email)}
+                  onImport={(args) => this.importTeamHost(args)}
+                />
+              </div>
+            )}
 
             {/* DASHBOARD */}
             {v.isDashboard && (v.noHosts ? (
