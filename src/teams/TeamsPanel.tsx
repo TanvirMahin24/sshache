@@ -46,6 +46,16 @@ const btn = (primary?: boolean): React.CSSProperties => ({
 });
 const label: React.CSSProperties = { display: 'block', marginTop: 12, color: 'var(--muted)', fontSize: 13 };
 
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: Props): React.ReactElement {
   const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://api.sshache.com');
   const [email, setEmail] = useState(defaults.email || '');
@@ -60,6 +70,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [connErr, setConnErr] = useState('');
   const [imported, setImported] = useState<Record<string, boolean>>({});
   const [importing, setImporting] = useState<Record<string, boolean>>({});
+  const [activity, setActivity] = useState<Record<string, { lastUsedAt: string; actorName: string }>>({});
 
   const teamName = memberships.find((m) => m.teamId === teamId)?.teamName ?? '';
 
@@ -104,10 +115,20 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     setTeamId(id);
     setConnErr('');
     setConns([]);
+    setActivity({});
     try {
       setConns(await teams.listConnections(id));
     } catch (e: any) {
       setConnErr(e?.message ?? String(e));
+    }
+    // Admins/Auditors see per-connection last-activity (best-effort; 403 for others).
+    const role = teams.currentMemberships().find((m) => m.teamId === id)?.role ?? '';
+    if (['OWNER', 'ADMIN', 'AUDITOR'].includes(role)) {
+      try {
+        setActivity(await teams.listActivity(id));
+      } catch {
+        /* ignore — activity is best-effort */
+      }
     }
   }
 
@@ -208,6 +229,11 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
                   <div style={{ color: 'var(--muted)', fontSize: 13 }}>
                     {c.meta.user}@{c.meta.host}:{c.meta.port} · {c.meta.auth}
                   </div>
+                  {activity[c.id] && (
+                    <div style={{ color: 'var(--accent, #46d9a0)', fontSize: 12, marginTop: 3 }}>
+                      Last used {timeAgo(activity[c.id]!.lastUsedAt)} · {activity[c.id]!.actorName}
+                    </div>
+                  )}
                 </div>
                 <button
                   style={btn(!imported[c.id])}
