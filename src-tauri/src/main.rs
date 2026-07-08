@@ -1360,9 +1360,12 @@ fn mcp_tool_call(app: &tauri::AppHandle, name: &str, args: &serde_json::Value) -
                 .find(|h| h["id"].as_str() == Some(host_id))
                 .ok_or("host not found or not exposed to the agent")?;
             let host_name = host["name"].as_str().unwrap_or("").to_string();
-            let allowed = mcp_request_approval(app, &host_name, command);
+            // Per-host opt-in: auto-allow skips the approval prompt for this host. Only exposed
+            // (agentAllowed) hosts reach here, and the run is still logged for transparency.
+            let auto = host.get("agentAutoAllow").and_then(|x| x.as_bool()).unwrap_or(false);
+            let allowed = if auto { true } else { mcp_request_approval(app, &host_name, command) };
             app.state::<McpState>().log.lock().unwrap().push(serde_json::json!({
-                "host": host_name, "command": command, "allowed": allowed,
+                "host": host_name, "command": command, "allowed": allowed, "auto": auto,
             }));
             if !allowed {
                 return Err("denied by user".into());

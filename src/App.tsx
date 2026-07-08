@@ -925,7 +925,11 @@ export default class App extends React.Component<any, any> {
     if (allow) setTimeout(() => this.refreshMcp(), 600);
   };
   toggleHostAgent(id) {
-    this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, agentAllowed: !h.agentAllowed } : h) }));
+    // Disabling agent access also clears auto-allow (can't auto-run a host the agent can't see).
+    this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, agentAllowed: !h.agentAllowed, agentAutoAllow: h.agentAllowed ? false : h.agentAutoAllow } : h) }));
+  }
+  toggleHostAgentAuto(id) {
+    this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, agentAutoAllow: !h.agentAutoAllow } : h) }));
   }
   componentDidUpdate(prevProps, prevState) {
     if (this.state.paletteOpen && !prevState.paletteOpen && this.paletteRef.current) {
@@ -2195,7 +2199,7 @@ export default class App extends React.Component<any, any> {
       toggleBroadcast: () => this.toggleBroadcast(),
       mcpOpen: s.mcpOpen, mcpRunning: s.mcpRunning, mcpUrl: MCP_URL, mcpToken: s.settings.mcpToken || '',
       mcpLog: s.mcpLog, mcpExposedCount: s.hosts.filter(h => h.agentAllowed).length,
-      mcpHosts: s.hosts.map(h => ({ id: h.id, name: h.name, target: h.user + '@' + h.addr, allowed: !!h.agentAllowed, onToggle: () => this.toggleHostAgent(h.id) })),
+      mcpHosts: s.hosts.map(h => ({ id: h.id, name: h.name, target: h.user + '@' + h.addr, allowed: !!h.agentAllowed, auto: !!h.agentAutoAllow, onToggle: () => this.toggleHostAgent(h.id), onToggleAuto: () => this.toggleHostAgentAuto(h.id) })),
       mcpConfig: JSON.stringify({ mcpServers: { sshache: { url: MCP_URL, headers: { Authorization: 'Bearer ' + (s.settings.mcpToken || '<token>') } } } }, null, 2),
       openMcp: () => this.openMcp(), closeMcp: () => this.setState({ mcpOpen: false }), toggleMcp: () => this.toggleMcp(),
       copyMcp: (text) => { try { navigator.clipboard.writeText(text).then(() => this.pushToast({ type: 'ok', title: 'Copied', msg: '' })).catch(() => {}); } catch (e) {} },
@@ -3245,7 +3249,7 @@ export default class App extends React.Component<any, any> {
               <div style={css("flex:1;overflow:auto;padding:18px 22px;display:flex;flex-direction:column;gap:20px;")}>
                 <div style={css("display:flex;gap:9px;padding:11px 13px;background:rgba(70,217,160,.05);border:1px solid rgba(70,217,160,.2);border-radius:9px;")}>
                   <span style={css("color:#46d9a0;flex:none;")}>⚿</span>
-                  <div style={css("font-size:11px;color:#9a9aa3;line-height:1.55;")}>Bound to <span style={css("color:#cfcfd6;")}>localhost</span> behind a bearer token. Only the hosts you enable below are visible. <span style={css("color:#cfcfd6;")}>Every command needs your approval.</span> Secrets are never sent to the agent.</div>
+                  <div style={css("font-size:11px;color:#9a9aa3;line-height:1.55;")}>Bound to <span style={css("color:#cfcfd6;")}>localhost</span> behind a bearer token. Only the hosts you enable below are visible. <span style={css("color:#cfcfd6;")}>Every command needs your approval, unless you turn on Auto-allow for a host.</span> Secrets are never sent to the agent.</div>
                 </div>
 
                 {v.mcpRunning && (
@@ -3278,6 +3282,14 @@ export default class App extends React.Component<any, any> {
                         <div style={css("font-size:12px;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{h.name}</div>
                         <div style={css("font-size:10.5px;color:#6a6a74;margin-top:1px;")}>{h.target}</div>
                       </div>
+                      {h.allowed && (
+                        <div onClick={h.onToggleAuto} title="Auto-allow: run agent commands on this host without a prompt" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 'none' }}>
+                          <span style={{ fontSize: '9px', letterSpacing: '.1em', color: h.auto ? '#ffcf5c' : '#54545e' }}>AUTO</span>
+                          <div style={{ width: '32px', height: '18px', borderRadius: '9px', background: h.auto ? '#ffcf5c' : '#26262e', position: 'relative' }}>
+                            <span style={{ position: 'absolute', top: '2px', left: h.auto ? '16px' : '2px', width: '14px', height: '14px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
+                          </div>
+                        </div>
+                      )}
                       <div onClick={h.onToggle} style={{ width: '38px', height: '22px', borderRadius: '11px', background: h.allowed ? '#46d9a0' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
                         <span style={{ position: 'absolute', top: '2px', left: h.allowed ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
                       </div>
@@ -3292,6 +3304,7 @@ export default class App extends React.Component<any, any> {
                     <div key={i} style={css("display:flex;align-items:center;gap:8px;font-size:11px;padding:6px 2px;")}>
                       <span style={{ color: l.allowed ? '#46d9a0' : '#ff6b78', flex: 'none' }}>{l.allowed ? '✓' : '✕'}</span>
                       <span style={css("color:#9a9aa3;flex:none;")}>{l.host}</span>
+                      {l.auto && (<span style={css("font-size:8.5px;letter-spacing:.08em;color:#ffcf5c;border:1px solid #4a3f1e;border-radius:4px;padding:0 4px;flex:none;")}>AUTO</span>)}
                       <span style={css("color:#cfcfd6;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:inherit;")}>{l.command}</span>
                     </div>
                   ))}
