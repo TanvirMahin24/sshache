@@ -247,7 +247,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
           <div style={box}>
             <label style={{ ...label, marginTop: 0 }}>
               Server URL
-              <input style={input} value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.sshache.com" />
+              <input style={input} value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://platform.sshache.com" />
             </label>
             <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '10px 0 0' }}>
               We'll open the web app in your browser to sign in or create an account — no password typed here.

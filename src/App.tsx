@@ -221,6 +221,10 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.5.0', items: [
+    'Teams: connect the app straight from your browser — log in on the web, type the code the app shows, and it links itself. No email or password typed in the app, and your keys never leave your device unencrypted.',
+    'Teams: a dashboard nudge to share connections with a team, and a clearer sign-in that spells out what Teams adds.',
+  ] },
   { version: '0.4.0', items: [
     'SFTP: the terminal↔SFTP split is now resizable, folders open on a single click, and ⌘/Shift multi-select works.',
     'SFTP: right-click a file to open it with a local app; expand SFTP to a full-screen file manager.',
