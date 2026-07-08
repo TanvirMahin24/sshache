@@ -223,3 +223,12 @@ export async function revealSecret(teamId: string, connId: string): Promise<Team
     connId,
   );
 }
+
+// Per-connection last-usage (Admin/Auditor): when each connection's secret was last pulled + by
+// whom. Server returns 403 for non-admins — callers should guard by role and ignore errors.
+export async function listActivity(
+  teamId: string,
+): Promise<Record<string, { lastUsedAt: string; actorName: string }>> {
+  const { activity } = await req('GET', `/v1/teams/${teamId}/connections/activity`);
+  return activity ?? {};
+}
