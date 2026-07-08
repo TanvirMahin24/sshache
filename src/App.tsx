@@ -218,6 +218,15 @@ const decryptJson = async (envelope: string, password: string) => {
 // MCP server (local agent access). Fixed loopback port + a random bearer token.
 const MCP_PORT = 8765;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
+
+// "What's new" changelog. Newest first; add an entry at the top when cutting a release.
+const CHANGELOG = [
+  { version: '0.3.1', items: ['Teams: fixed the connection list going blank right after importing shared connections.'] },
+  { version: '0.3.0', items: ['New Teams module — sign in and import SSH connections your team shares with you, decrypted locally (end-to-end encrypted).'] },
+  { version: '0.2.2', items: ['SFTP now matches the terminal for pasted key text, jump hosts and host-key checks, with a real key-file picker.'] },
+  { version: '0.2.1', items: ['Output triggers — watch terminal output with a regex and get a marker plus a desktop notification.'] },
+  { version: '0.2.0', items: ['Jump hosts (ProxyJump), SOCKS and remote port forwards, SFTP file operations, scrollback search, snippets, and a native macOS title bar.'] },
+];
 const genToken = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 // Vault-lock passphrase: store a PBKDF2 hash (salt + derived bits), verify on unlock.
@@ -626,6 +635,7 @@ export default class App extends React.Component<any, any> {
     paletteOpen: false,
     themesOpen: false,
     aboutOpen: false,
+    whatsNewOpen: false,
     paletteQuery: '',
     themeId: 'ember',
     tourSeen: false,
@@ -738,7 +748,7 @@ export default class App extends React.Component<any, any> {
       else if (meta && k === 'n') { e.preventDefault(); this.openAddHost(); }
       else if (meta && k === '1') { e.preventDefault(); this.setState({ view: 'dashboard' }); }
       else if (meta && k === '2') { e.preventDefault(); this.setState({ view: 'workspace' }); }
-      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false }); }
+      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false, whatsNewOpen: false }); }
     };
     window.addEventListener('keydown', this._key);
     // Resolve the real app version, then auto-check for a newer release once.
@@ -1815,6 +1825,7 @@ export default class App extends React.Component<any, any> {
       { name:'Split down', hint:'', icon:'▢', color:'#ff7a59', run: () => this.splitDown() },
       { name:'Close pane', hint:'', icon:'×', color:'#ff6b78', run: () => this.closePaneById(this.state.activePaneId) },
       { name:'Browse themes', hint:'⌘T', icon:'◐', color:'#bd93f9', run: () => this.setState({ themesOpen: true }) },
+      { name:"What's new", hint:'', icon:'✦', color:'#46d9a0', run: () => this.setState({ whatsNewOpen: true }) },
       { name:'Open SFTP panel', hint:'⌘J', icon:'⇅', color:'#46d9a0', run: () => this.setState({ sftpOpen: true }, () => this.openSftp()) },
       { name:'Toggle sidebar', hint:'⌘B', icon:'▤', color:'#9a9aa3', run: () => this.setState(st => ({ sidebarOpen: !st.sidebarOpen })) },
       { name:'Clear terminal', hint:'', icon:'⌫', color:'#9a9aa3', run: () => this.clearActive() },
@@ -2056,6 +2067,10 @@ export default class App extends React.Component<any, any> {
       aboutOpen: s.aboutOpen,
       openAbout: () => this.setState({ aboutOpen: true }),
       closeAbout: () => this.setState({ aboutOpen: false }),
+      whatsNewOpen: s.whatsNewOpen,
+      openWhatsNew: () => this.setState({ whatsNewOpen: true, aboutOpen: false, paletteOpen: false }),
+      closeWhatsNew: () => this.setState({ whatsNewOpen: false }),
+      changelog: CHANGELOG,
       author: AUTHOR, openExt,
       newTab: () => this.newTab(),
       splitRight: this.splitRight, splitDown: this.splitDown,
@@ -2682,7 +2697,37 @@ export default class App extends React.Component<any, any> {
                   <Hov as="button" onClick={() => v.openExt(v.author.site)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Website</Hov>
                 </div>
                 <Hov as="button" onClick={() => v.openExt(v.author.tip)} s="margin-top:11px;width:100%;padding:11px;background:linear-gradient(135deg,#ff7a59,#ff4f7a);border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;" h="filter:brightness(1.06);">☕&nbsp;Buy me a coffee</Hov>
-                <div style={css("font-size:10px;color:#54545e;margin-top:14px;")}>SSH&nbsp;Ache · v{v.appVersion}</div>
+                <Hov as="button" onClick={v.openWhatsNew} s="margin-top:12px;background:none;border:none;color:#7a7a85;font:inherit;font-size:11px;text-decoration:underline;cursor:pointer;" h="color:#ededf0;">What's new in SSH&nbsp;Ache</Hov>
+                <div style={css("font-size:10px;color:#54545e;margin-top:10px;")}>SSH&nbsp;Ache · v{v.appVersion}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* WHAT'S NEW */}
+        {v.whatsNewOpen && (
+          <div onClick={v.closeWhatsNew} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:66;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:470px;max-width:96%;max-height:80vh;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:11px;padding:16px 20px;border-bottom:1px solid #18181f;")}>
+                <span style={css("color:#46d9a0;")}>✦</span>
+                <span style={css("font-size:13px;font-weight:700;color:#f2f2f5;")}>What's new</span>
+                <span style={css("flex:1;")}></span>
+                <Hov onClick={v.closeWhatsNew} s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border:1px solid #26262e;border-radius:6px;cursor:pointer;" h="background:#16161c;color:#ededf0;">×</Hov>
+              </div>
+              <div style={css("padding:18px 22px 22px;overflow:auto;")}>
+                {v.changelog.map((rel, ri) => (
+                  <div key={ri} style={css("margin-bottom:17px;")}>
+                    <div style={css("display:flex;align-items:center;gap:8px;margin-bottom:6px;")}>
+                      <span style={css("font-size:12.5px;font-weight:700;color:#ededf0;")}>v{rel.version}</span>
+                      {ri === 0 && (<span style={css("font-size:8.5px;letter-spacing:.08em;color:#0c0b0a;background:#46d9a0;border-radius:4px;padding:1px 6px;")}>LATEST</span>)}
+                    </div>
+                    {rel.items.map((it, ii) => (
+                      <div key={ii} style={css("display:flex;gap:8px;font-size:11.5px;color:#b9b9c2;line-height:1.55;margin-top:5px;")}>
+                        <span style={css("color:#ff7a59;flex:none;")}>›</span><span>{it}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
