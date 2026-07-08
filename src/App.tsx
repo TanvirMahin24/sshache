@@ -674,6 +674,7 @@ export default class App extends React.Component<any, any> {
     sftpId: null,
     sftpStatus: 'idle', // idle | connecting | ready | error
     sftpErr: '',
+    sftpW: 392, // resizable terminal↔SFTP split width (px)
     sftpPrompt: null, // null | { mode:'mkdir'|'rename'|'delete', ... }
     triggerDraft: '', triggerColor: '#ff7a59', // output-trigger add form
     conflict: null,
@@ -682,6 +683,8 @@ export default class App extends React.Component<any, any> {
     queue: [],
     selLocal: [],
     selRemote: [],
+    selAnchorLocal: null, // last-clicked index for Shift-range select
+    selAnchorRemote: null,
     tabs: [
       { id:'t1', title:'localhost', host:'localhost', user:'you', addr:'shell', layout:'row', sizes:[100], panes:[
         { id:'p1', live:true, kind:'local', sessionId:'p1', host:{ addr:'localhost', user:'you' }, user:'you', hostName:'localhost', cwd:'~', input:'', lines:[] }
@@ -1241,9 +1244,53 @@ export default class App extends React.Component<any, any> {
   };
 
   // ---- SFTP transfer queue (multi-file / folder drag-drop) ----
-  toggleSel(side, name) {
-    const key = side === 'local' ? 'selLocal' : 'selRemote';
-    this.setState(s => { const cur = s[key]; return { [key]: cur.includes(name) ? cur.filter(n => n !== name) : [...cur, name] }; });
+  // SFTP row click (Finder-style): plain click opens a folder / selects a single file;
+  // ⌘/Ctrl-click toggles it in the selection; Shift-click range-selects from the anchor.
+  onFileClick(side, f, e) {
+    const listKey = side === 'local' ? 'localFiles' : 'remoteFiles';
+    const selKey = side === 'local' ? 'selLocal' : 'selRemote';
+    const anchorKey = side === 'local' ? 'selAnchorLocal' : 'selAnchorRemote';
+    const s = this.state;
+    const list = s[listKey];
+    const idx = list.findIndex(x => x.name === f.name);
+    if (e.shiftKey && s[anchorKey] != null) {
+      const anchor = s[anchorKey];
+      const [a, b] = anchor <= idx ? [anchor, idx] : [idx, anchor];
+      this.setState({ [selKey]: list.slice(a, b + 1).map(x => x.name) });
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      const cur = s[selKey];
+      const next = cur.includes(f.name) ? cur.filter(n => n !== f.name) : [...cur, f.name];
+      this.setState({ [selKey]: next, [anchorKey]: idx });
+      return;
+    }
+    if (f.kind === 'dir') {
+      const base = side === 'local' ? s.localPath : s.remotePath;
+      const path = this._sftpJoin(base, f.name);
+      if (side === 'local') this.listLocal(path); else this.listRemote(path);
+      return;
+    }
+    this.setState({ [selKey]: [f.name], [anchorKey]: idx });
+  }
+  // Drag a divider to resize the terminal↔SFTP split (SFTP panel is on the right).
+  startSftpResize(e) {
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX;
+    const startW = this.state.sftpW;
+    const maxW = Math.max(320, window.innerWidth - 360); // always leave room for the terminal
+    const move = (ev) => {
+      const w = Math.max(300, Math.min(maxW, startW + (startX - ev.clientX)));
+      this.setState({ sftpW: w });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    document.body.style.cursor = 'col-resize';
   }
   // Drop onto the opposite pane: enqueue the dragged item(s) and start draining.
   sftpDrop(targetSide) {
@@ -1336,12 +1383,12 @@ export default class App extends React.Component<any, any> {
       .catch((e) => this.setState({ sftpStatus: 'error', sftpErr: String(e) }));
   }
   listLocal(path) {
-    invoke('local_list', { path }).then((files) => this.setState({ localFiles: files, localPath: path, selLocal: [] })).catch((e) => this.setState({ sftpErr: String(e) }));
+    invoke('local_list', { path }).then((files) => this.setState({ localFiles: files, localPath: path, selLocal: [], selAnchorLocal: null })).catch((e) => this.setState({ sftpErr: String(e) }));
   }
   listRemote(path) {
     const id = this.state.sftpId;
     if (!id) return;
-    invoke('sftp_list', { id, path }).then((files) => this.setState({ remoteFiles: files, remotePath: path, selRemote: [] })).catch((e) => this.setState({ sftpErr: String(e) }));
+    invoke('sftp_list', { id, path }).then((files) => this.setState({ remoteFiles: files, remotePath: path, selRemote: [], selAnchorRemote: null })).catch((e) => this.setState({ sftpErr: String(e) }));
   }
   // ---- remote SFTP file ops (mkdir / rename / delete) ----
   _sftpJoin(a, b) { return (a === '/' ? '' : (a || '').replace(/\/+$/, '')) + '/' + b; }
@@ -1795,7 +1842,7 @@ export default class App extends React.Component<any, any> {
         glyph: isDir ? '▸' : '◦', glyphColor: isDir ? '#ff7a59' : '#54545e',
         sub: isDir ? 'dir' : (f.size || ''),
         rowStyle: rowStyle(isDir, selected),
-        onClick: () => this.toggleSel(side, f.name),
+        onClick: (e) => this.onFileClick(side, f, e),
         onDouble: isDir ? () => navTo(side, joinPath(base, f.name)) : null,
         // Drag the whole selection if this row is part of it, else just this row.
         onDragStart: (e) => {
@@ -1995,6 +2042,8 @@ export default class App extends React.Component<any, any> {
       toggleSidebar: () => this.setState(st => ({ sidebarOpen: !st.sidebarOpen })),
       winMin: () => this.winAction('min'), winMax: () => this.winAction('max'), winClose: () => this.winAction('close'),
       toggleSftp: () => this.toggleSftp(),
+      sftpW: s.sftpW,
+      onSftpGutterDown: (e) => this.startSftpResize(e),
       openPalette: () => this.setState({ paletteOpen: true, paletteQuery: '' }),
       closePalette: () => this.setState({ paletteOpen: false }),
       setPaletteQuery: (e) => this.setState({ paletteQuery: e.target.value }),
@@ -2454,9 +2503,16 @@ export default class App extends React.Component<any, any> {
                   </div>
                   ))}
 
+                  {/* Drag divider — resize the terminal↔SFTP split */}
+                  {v.sftpOpen && (
+                    <div className="aca-resizer" onMouseDown={v.onSftpGutterDown} title="Drag to resize" style={css("width:8px;flex:none;margin-left:4px;display:flex;align-items:center;justify-content:center;cursor:col-resize;")}>
+                      <span className="aca-rzbar" style={css("width:2px;height:42px;")}></span>
+                    </div>
+                  )}
+
                   {/* SFTP PANEL */}
                   {v.sftpOpen && (
-                    <div style={css("width:392px;flex:none;margin-left:10px;background:#0b0b0e;border:1px solid #1c1c24;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;animation:acaRise .2s ease;")}>
+                    <div style={css(`width:${v.sftpW}px;flex:none;margin-left:6px;background:#0b0b0e;border:1px solid #1c1c24;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;animation:acaRise .2s ease;`)}>
                       <div style={css("display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #16161c;")}>
                         <span style={css("color:#ff7a59;")}>⇅</span>
                         <span style={css("font-size:12px;font-weight:600;color:#ededf0;")}>SFTP</span>
