@@ -73,6 +73,10 @@ Your data stays on your machine, encrypted at rest.
 
 Tauri 2 (Rust backend) · React + xterm.js (frontend) · russh / russh-sftp · portable-pty · OS keychain (keyring).
 
+## License
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE). You may use, modify, and share SSH Ache for **any noncommercial purpose** — personal use, research, education, hobby projects. **Commercial use of any kind requires a separate commercial license** (written permission). For commercial licensing, email [hello@sshache.com](mailto:hello@sshache.com).
+
 ## Support
 
 If SSH Ache saves you time, you can [buy me a coffee ☕](https://www.patreon.com/cw/tanvirmahin24).
