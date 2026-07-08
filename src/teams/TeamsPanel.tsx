@@ -162,6 +162,18 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
           Sign in to SSH Ache Teams to load connections your team has shared with you. They are
           decrypted on this device — the server never sees your secrets.
         </p>
+        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 18px', display: 'grid', gap: 9 }}>
+          {[
+            ['🔐', 'Share SSH connections end-to-end encrypted — the server only stores ciphertext.'],
+            ['🟢', "See who's online and watch a teammate's live session, Figma-style."],
+            ['🎫', 'Grant per-connection access and revoke anyone in one click.'],
+          ].map(([ic, t]) => (
+            <li key={t} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 13, color: 'var(--muted)' }}>
+              <span style={{ flex: 'none' }}>{ic}</span>
+              <span>{t}</span>
+            </li>
+          ))}
+        </ul>
         {!isTauri && (
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>
             Note: imported credentials are stored in your OS keychain, which is only available in

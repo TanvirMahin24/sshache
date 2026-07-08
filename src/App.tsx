@@ -2156,6 +2156,8 @@ export default class App extends React.Component<any, any> {
       isTeams: s.view === 'teams',
       navTeamsStyle: folderItemStyle(s.view === 'teams'),
       goTeams: () => this.setView('teams'),
+      teamNudge: !s.settings.teamNudgeDismissed,
+      dismissTeamNudge: () => this.setState(st => ({ settings: { ...st.settings, teamNudgeDismissed: true } })),
       teamsDefaults: { apiUrl: s.settings.teamsApiUrl || '', email: s.settings.teamsEmail || '' },
 
       // dashboard
@@ -2466,6 +2468,17 @@ export default class App extends React.Component<any, any> {
                   )}
                 </div>
                 <div style={css("flex:1;overflow:auto;padding:18px 26px 26px;")}>
+                  {v.teamNudge && (
+                    <div style={css("display:flex;align-items:center;gap:14px;padding:14px 16px;margin-bottom:20px;border:1px solid rgba(70,217,160,.28);background:linear-gradient(180deg,rgba(70,217,160,.07),rgba(70,217,160,.02));border-radius:11px;")}>
+                      <span style={css("font-size:20px;flex:none;")}>👥</span>
+                      <div style={css("flex:1;min-width:0;")}>
+                        <div style={css("font-size:13px;font-weight:600;color:#ededf0;")}>Working with a team?</div>
+                        <div style={css("font-size:11.5px;color:#9a9aa3;margin-top:2px;")}>Share these connections end-to-end encrypted — with live presence, spectating, and one-click revoke.</div>
+                      </div>
+                      <Hov as="button" onClick={v.goTeams} s="flex:none;padding:9px 15px;background:#46d9a0;border:none;border-radius:8px;color:#062a1c;font:inherit;font-size:12px;font-weight:700;cursor:pointer;" h="filter:brightness(1.06);">Set up Teams</Hov>
+                      <Hov onClick={v.dismissTeamNudge} title="Dismiss" s="flex:none;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:6px;cursor:pointer;" h="background:#16161c;color:#ededf0;">×</Hov>
+                    </div>
+                  )}
                   {v.groups.map((group) => (
                     <div key={group.folder} style={css("margin-bottom:24px;")}>
                       <div style={css("display:flex;align-items:center;gap:8px;margin-bottom:12px;")}>
