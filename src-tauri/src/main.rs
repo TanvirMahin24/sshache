@@ -742,6 +742,61 @@ async fn sftp_get(
     Ok(())
 }
 
+// Download a remote SFTP file to a temp dir and open it with the local default app ("Open with"
+// a remote file). ponytail: no progress channel — for quick document opens; big files still work,
+// just without a bar. The temp copy is the user's own file from their own server; opening it uses
+// the OS default handler, the same trust model as double-clicking it in Finder/Explorer.
+#[tauri::command]
+async fn sftp_open_external(
+    state: State<'_, SftpState>,
+    id: String,
+    remote_path: String,
+    name: String,
+) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let sftp = sftp_of(&state, &id)?;
+    // Bare basename only, so a crafted name can't escape the temp dir.
+    let base = std::path::Path::new(&name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .ok_or("invalid file name")?
+        .to_string();
+    let dir = std::env::temp_dir().join("sshache-open");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
+    let local = dir.join(&base);
+    let mut file = sftp
+        .open(&remote_path)
+        .await
+        .map_err(|e| format!("open remote: {e}"))?;
+    let mut out = tokio::fs::File::create(&local)
+        .await
+        .map_err(|e| format!("create temp: {e}"))?;
+    let mut buf = vec![0u8; 32768];
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])
+            .await
+            .map_err(|e| format!("write temp: {e}"))?;
+    }
+    out.flush().await.map_err(|e| format!("flush: {e}"))?;
+    let local_str = local.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    let prog = "open";
+    #[cfg(target_os = "windows")]
+    let prog = "explorer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let prog = "xdg-open";
+    std::process::Command::new(prog)
+        .arg(&local_str)
+        .spawn()
+        .map_err(|e| format!("open: {e}"))?;
+    Ok(local_str)
+}
+
 // Recursive upload: walk the local tree, mkdir remote dirs, put each file.
 // Progress is by file count. ponytail: iterative walk (no async recursion).
 #[tauri::command]
@@ -1497,6 +1552,27 @@ fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// Open a local file or folder with the OS default application ("Open with"). The path must exist
+// so a stray value can't spawn an arbitrary program name; the file is then handed to the OS
+// default handler — same trust model as double-clicking it in Finder/Explorer.
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("path does not exist".into());
+    }
+    #[cfg(target_os = "macos")]
+    let prog = "open";
+    #[cfg(target_os = "windows")]
+    let prog = "explorer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let prog = "xdg-open";
+    std::process::Command::new(prog)
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1520,6 +1596,8 @@ fn main() {
             sftp_list,
             sftp_put,
             sftp_get,
+            sftp_open_external,
+            open_path,
             sftp_put_dir,
             sftp_get_dir,
             sftp_disconnect,

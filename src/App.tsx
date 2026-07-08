@@ -685,6 +685,7 @@ export default class App extends React.Component<any, any> {
     sftpStatus: 'idle', // idle | connecting | ready | error
     sftpErr: '',
     sftpW: 392, // resizable terminal↔SFTP split width (px)
+    sftpCtx: null, // right-click context menu: { x, y, side, name, isDir }
     sftpPrompt: null, // null | { mode:'mkdir'|'rename'|'delete', ... }
     triggerDraft: '', triggerColor: '#ff7a59', // output-trigger add form
     conflict: null,
@@ -748,7 +749,7 @@ export default class App extends React.Component<any, any> {
       else if (meta && k === 'n') { e.preventDefault(); this.openAddHost(); }
       else if (meta && k === '1') { e.preventDefault(); this.setState({ view: 'dashboard' }); }
       else if (meta && k === '2') { e.preventDefault(); this.setState({ view: 'workspace' }); }
-      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false, whatsNewOpen: false }); }
+      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false, whatsNewOpen: false, sftpCtx: null }); }
     };
     window.addEventListener('keydown', this._key);
     // Resolve the real app version, then auto-check for a newer release once.
@@ -1369,6 +1370,41 @@ export default class App extends React.Component<any, any> {
     });
   }
 
+  // ---- SFTP right-click context menu ----
+  openFileCtx(side, f, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Select the right-clicked file (unless already in a multi-selection) so rename/delete/open target it.
+    const selKey = side === 'local' ? 'selLocal' : 'selRemote';
+    const patch = { sftpCtx: { x: e.clientX, y: e.clientY, side, name: f.name, isDir: f.kind === 'dir' } };
+    if (!this.state[selKey].includes(f.name)) patch[selKey] = [f.name];
+    this.setState(patch);
+  }
+  closeFileCtx = () => { if (this.state.sftpCtx) this.setState({ sftpCtx: null }); };
+  async openFileExternal(side, name, isDir) {
+    this.closeFileCtx();
+    if (isDir) { // "Open" a folder = navigate into it
+      const base = side === 'local' ? this.state.localPath : this.state.remotePath;
+      const p = this._sftpJoin(base, name);
+      if (side === 'local') this.listLocal(p); else this.listRemote(p);
+      return;
+    }
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'Open', msg: 'Available in the desktop app.' }); return; }
+    try {
+      if (side === 'local') {
+        await invoke('open_path', { path: this._sftpJoin(this.state.localPath, name) });
+      } else {
+        if (!this.state.sftpId) return;
+        await invoke('sftp_open_external', { id: this.state.sftpId, remotePath: this._sftpJoin(this.state.remotePath, name), name });
+        this.pushToast({ type: 'ok', title: 'Opening', msg: name });
+      }
+    } catch (err) { this.pushToast({ type: 'err', title: 'Open failed', msg: String(err) }); }
+  }
+  revealLocal = () => {
+    this.closeFileCtx();
+    if (isTauri) invoke('open_path', { path: this.state.localPath }).catch((err) => this.pushToast({ type: 'err', title: 'Reveal failed', msg: String(err) }));
+  };
+
   // ---- SFTP panel ----
   toggleSftp() {
     if (this.state.sftpOpen) { this.closeSftp(); return; }
@@ -1859,6 +1895,7 @@ export default class App extends React.Component<any, any> {
         rowStyle: rowStyle(isDir, selected),
         onClick: (e) => this.onFileClick(side, f, e),
         onDouble: isDir ? () => navTo(side, joinPath(base, f.name)) : null,
+        onContext: (e) => this.openFileCtx(side, f, e),
         // Drag the whole selection if this row is part of it, else just this row.
         onDragStart: (e) => {
           const sel = selOf(side);
@@ -2060,6 +2097,10 @@ export default class App extends React.Component<any, any> {
       toggleSftp: () => this.toggleSftp(),
       sftpW: s.sftpW,
       onSftpGutterDown: (e) => this.startSftpResize(e),
+      sftpCtx: s.sftpCtx,
+      closeFileCtx: () => this.closeFileCtx(),
+      ctxOpen: (side, name, isDir) => this.openFileExternal(side, name, isDir),
+      ctxReveal: () => this.revealLocal(),
       openPalette: () => this.setState({ paletteOpen: true, paletteQuery: '' }),
       closePalette: () => this.setState({ paletteOpen: false }),
       setPaletteQuery: (e) => this.setState({ paletteQuery: e.target.value }),
@@ -2550,7 +2591,7 @@ export default class App extends React.Component<any, any> {
                           </div>
                           <div style={css("flex:1;overflow:auto;padding:5px;")}>
                             {v.localFiles.map((file, i) => (
-                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} s={file.rowStyle} h="background:#15151b;">
+                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} onContextMenu={file.onContext} s={file.rowStyle} h="background:#15151b;">
                                 <span style={{ color: file.glyphColor, width: "11px", textAlign: "center", flex: "none" }}>{file.glyph}</span>
                                 <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{file.name}</span>
                                 <span style={css("color:#54545e;font-size:10px;")}>{file.sub}</span>
@@ -2570,7 +2611,7 @@ export default class App extends React.Component<any, any> {
                           </div>
                           <div style={css("flex:1;overflow:auto;padding:5px;")}>
                             {v.remoteFiles.map((file, i) => (
-                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} s={file.rowStyle} h="background:#15151b;">
+                              <Hov key={i} draggable={!file.isUp} onDragStart={file.onDragStart} onClick={file.onClick} onDoubleClick={file.onDouble || undefined} onContextMenu={file.onContext} s={file.rowStyle} h="background:#15151b;">
                                 <span style={{ color: file.glyphColor, width: "11px", textAlign: "center", flex: "none" }}>{file.glyph}</span>
                                 <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{file.name}</span>
                                 <span style={css("color:#54545e;font-size:10px;")}>{file.sub}</span>
@@ -2677,6 +2718,26 @@ export default class App extends React.Component<any, any> {
         )}
 
         {/* ABOUT / AUTHOR */}
+        {/* SFTP RIGHT-CLICK MENU */}
+        {v.sftpCtx && (
+          <>
+            <div onClick={v.closeFileCtx} onContextMenu={(e) => { e.preventDefault(); v.closeFileCtx(); }} style={css("position:fixed;inset:0;z-index:80;")}></div>
+            <div style={{ position: 'fixed', left: v.sftpCtx.x + 'px', top: v.sftpCtx.y + 'px', zIndex: 81, minWidth: '186px', maxWidth: '240px', background: '#101015', border: '1px solid #26262e', borderRadius: '9px', padding: '5px', boxShadow: '0 18px 44px rgba(0,0,0,.6)', fontSize: '12px', animation: 'acaFade .1s ease' }}>
+              <Hov onClick={() => v.ctxOpen(v.sftpCtx.side, v.sftpCtx.name, v.sftpCtx.isDir)} s="display:block;padding:7px 10px;border-radius:6px;cursor:pointer;color:#cfcfd6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" h="background:#1a1a22;color:#ededf0;">{v.sftpCtx.isDir ? 'Open folder' : (v.sftpCtx.side === 'remote' ? 'Download & open' : 'Open with default app')}</Hov>
+              {v.sftpCtx.side === 'local' && !v.sftpCtx.isDir && (
+                <Hov onClick={v.ctxReveal} s="display:block;padding:7px 10px;border-radius:6px;cursor:pointer;color:#cfcfd6;" h="background:#1a1a22;color:#ededf0;">Reveal in file manager</Hov>
+              )}
+              {v.sftpCtx.side === 'remote' && (
+                <>
+                  <div style={css("height:1px;background:#1e1e26;margin:4px 6px;")}></div>
+                  <Hov onClick={() => { v.closeFileCtx(); v.sftpRename(); }} s="display:block;padding:7px 10px;border-radius:6px;cursor:pointer;color:#cfcfd6;" h="background:#1a1a22;color:#ededf0;">Rename…</Hov>
+                  <Hov onClick={() => { v.closeFileCtx(); v.sftpDelete(); }} s="display:block;padding:7px 10px;border-radius:6px;cursor:pointer;color:#ff6b78;" h="background:rgba(255,107,120,.14);color:#ff6b78;">Delete</Hov>
+                </>
+              )}
+            </div>
+          </>
+        )}
+
         {v.aboutOpen && (
           <div onClick={v.closeAbout} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:66;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:420px;max-width:96%;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
