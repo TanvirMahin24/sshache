@@ -56,6 +56,7 @@ let base = '';
 let accessToken = '';
 let refreshToken = '';
 let vault: Vault | null = null;
+let linkEph: C.KeyPair | null = null; // ephemeral X25519 keypair for an in-flight device link
 // Cached across TeamsPanel unmount/remount (view switches): the vault lives in this module, so
 // the UI must restore its memberships from here rather than re-init to [] and render blank.
 let cachedMemberships: Membership[] = [];
@@ -163,6 +164,50 @@ export async function signIn(
   const me = await req('GET', '/v1/auth/me');
   cachedMemberships = me.memberships ?? [];
   return { user: me.user, memberships: cachedMemberships };
+}
+
+// ---- Device linking (no email/password typed in the app) ----------------
+// The app generates an ephemeral keypair, opens the web app, and the browser (already unlocked)
+// seals the identity + a fresh desktop session to linkEph.publicKey. We poll for it and unseal
+// locally — the server only ever relays ciphertext it can't read.
+
+export async function startLink(
+  apiUrl: string,
+): Promise<{ linkId: string; code: string; approveUrl: string }> {
+  base = apiUrl.replace(/\/+$/, '');
+  linkEph = C.newEphemeralKeypair();
+  const r = await raw('POST', '/v1/device-link/start', { desktopPubKey: C.b64(linkEph.publicKey) }, false);
+  if (!r.ok || !r.data?.linkId) {
+    throw new TeamsError(r.status, r.data?.error?.message ?? 'Could not start linking', r.data?.error?.code);
+  }
+  return { linkId: r.data.linkId, code: r.data.code, approveUrl: r.data.approveUrl };
+}
+
+// Poll once. Returns { status } while pending; when the browser has approved, unseals the payload
+// locally (identity + tokens), completes sign-in, and returns { status: 'linked', memberships }.
+export async function claimLink(
+  linkId: string,
+): Promise<{ status: string; memberships?: Membership[] }> {
+  if (!linkEph) throw new TeamsError(400, 'No link in progress', 'no_link');
+  const r = await raw('GET', `/v1/device-link/${linkId}/status`, undefined, false);
+  if (!r.ok) throw new TeamsError(r.status, r.data?.error?.message ?? 'Link check failed', r.data?.error?.code);
+  const status = String(r.data?.status ?? 'pending');
+  if (status !== 'approved' || !r.data?.sealedPayload) return { status };
+  const opened = await C.openBox(C.unb64(r.data.sealedPayload), linkEph.secretKey);
+  const p = JSON.parse(new TextDecoder().decode(opened)) as {
+    email: string;
+    userId: string;
+    identity: string;
+    accessToken: string;
+    refreshToken: string;
+  };
+  vault = { userId: p.userId, email: p.email, identity: C.identityFromSecret(C.unb64(p.identity)) };
+  accessToken = p.accessToken;
+  refreshToken = p.refreshToken;
+  linkEph = null;
+  teamKeys.clear();
+  const memberships = await loadMemberships();
+  return { status: 'linked', memberships };
 }
 
 // ---- Team key + connections ---------------------------------------------

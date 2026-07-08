@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import * as teams from './client.js';
 
 // The "Teams" view: sign into SSH Ache Teams (the sshache-sass SaaS), browse a team's shared
@@ -71,6 +72,10 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [imported, setImported] = useState<Record<string, boolean>>({});
   const [importing, setImporting] = useState<Record<string, boolean>>({});
   const [activity, setActivity] = useState<Record<string, { lastUsedAt: string; actorName: string }>>({});
+  const [linking, setLinking] = useState<{ code: string; linkId: string } | null>(null);
+  const [linkErr, setLinkErr] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const teamName = memberships.find((m) => m.teamId === teamId)?.teamName ?? '';
 
@@ -92,6 +97,53 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
       if (ms.length) void loadTeam(ms[0].teamId);
     })();
   }, []);
+
+  // Device linking: open the web app in the browser, sign in / approve there, then unseal the
+  // identity locally — no email/password is ever typed in the app.
+  async function startLinkFlow(): Promise<void> {
+    setLinkErr('');
+    if (pollRef.current) clearInterval(pollRef.current);
+    try {
+      const { linkId, code, approveUrl } = await teams.startLink(apiUrl.trim());
+      onRemember(apiUrl.trim(), email.trim());
+      setLinking({ code, linkId });
+      if (isTauri) void invoke('open_url', { url: approveUrl }).catch(() => {});
+      else window.open(approveUrl, '_blank', 'noopener');
+      let tries = 0;
+      pollRef.current = setInterval(() => {
+        tries += 1;
+        void (async () => {
+          try {
+            const r = await teams.claimLink(linkId);
+            if (r.status === 'linked') {
+              if (pollRef.current) clearInterval(pollRef.current);
+              setLinking(null);
+              setSignedIn(true);
+              setMemberships(r.memberships ?? []);
+              if (r.memberships?.length) void loadTeam(r.memberships[0].teamId);
+            } else if (r.status === 'expired' || r.status === 'claimed') {
+              if (pollRef.current) clearInterval(pollRef.current);
+              setLinking(null);
+              setLinkErr('The link expired before it was approved. Try again.');
+            }
+          } catch {
+            /* transient — keep polling */
+          }
+        })();
+        if (tries > 150) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setLinking(null);
+          setLinkErr('Timed out waiting for approval. Try again.');
+        }
+      }, 2000);
+    } catch (e: any) {
+      setLinkErr(e?.message ?? String(e));
+    }
+  }
+  function cancelLink(): void {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setLinking(null);
+  }
 
   async function doSignIn(e: React.FormEvent): Promise<void> {
     e.preventDefault();
@@ -180,26 +232,53 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
             the desktop app.
           </p>
         )}
-        <form onSubmit={doSignIn} style={box}>
-          <label style={{ ...label, marginTop: 0 }}>
-            Server URL
-            <input style={input} value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.sshache.com" />
-          </label>
-          <label style={label}>
-            Email
-            <input style={input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
-          </label>
-          <label style={label}>
-            Password
-            <input style={input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-          </label>
-          {err && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13, marginBottom: 0 }}>{err}</p>}
-          <div style={{ marginTop: 16 }}>
-            <button type="submit" style={btn(true)} disabled={busy || !email || !password}>
-              {busy ? 'Signing in…' : 'Sign in & unlock'}
-            </button>
+        {linking ? (
+          <div style={{ ...box, textAlign: 'center' }}>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+              Approve in your browser to finish. Confirm this code matches the one shown there:
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text, #ededf0)', margin: '4px 0 14px' }}>{linking.code}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Waiting for approval…</div>
+            <div style={{ marginTop: 14 }}>
+              <button style={btn()} onClick={cancelLink}>Cancel</button>
+            </div>
           </div>
-        </form>
+        ) : (
+          <div style={box}>
+            <label style={{ ...label, marginTop: 0 }}>
+              Server URL
+              <input style={input} value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.sshache.com" />
+            </label>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '10px 0 0' }}>
+              We'll open the web app in your browser to sign in or create an account — no password typed here.
+            </p>
+            {linkErr && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13, marginBottom: 0 }}>{linkErr}</p>}
+            <div style={{ marginTop: 16 }}>
+              <button style={btn(true)} onClick={() => void startLinkFlow()} disabled={!apiUrl.trim()}>
+                Connect via browser
+              </button>
+            </div>
+            <details style={{ marginTop: 18 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--muted)' }}>Sign in with email instead</summary>
+              <form onSubmit={doSignIn} style={{ ...box, marginTop: 12 }}>
+                <label style={{ ...label, marginTop: 0 }}>
+                  Email
+                  <input style={input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+                </label>
+                <label style={label}>
+                  Password
+                  <input style={input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                </label>
+                {err && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13, marginBottom: 0 }}>{err}</p>}
+                <div style={{ marginTop: 16 }}>
+                  <button type="submit" style={btn(true)} disabled={busy || !email || !password}>
+                    {busy ? 'Signing in…' : 'Sign in & unlock'}
+                  </button>
+                </div>
+              </form>
+            </details>
+          </div>
+        )}
       </div>
     );
   }

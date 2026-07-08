@@ -30,6 +30,8 @@ export {
   bootstrapAccount,
   pubKeysB64,
   generateEscrowKeypair,
+  identityFromSecret,
+  newEphemeralKeypair,
   type Identity,
   type KeyPair,
   type PublicBundle,
