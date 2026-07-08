@@ -657,6 +657,7 @@ export default class App extends React.Component<any, any> {
     update: null,        // null | { version, url, asset }
     updateChecking: false,
     view: 'dashboard',
+    teamPresence: {}, // connId -> [{ userId, displayName, kind }] of teammates active on it (not you)
     broadcast: false,
     search: '',
     activeFolder: 'all',
@@ -794,6 +795,9 @@ export default class App extends React.Component<any, any> {
       this.refreshMcp();
       import('@tauri-apps/api/event').then(({ listen }) => { listen('mcp-approval', (e) => this.setState({ approvalReq: e.payload })); }).catch(() => {});
     }
+    // Team presence: report which team connection each live SSH pane is on, and poll who's active.
+    this._hbTimer = setInterval(() => this.presenceHeartbeatTick(), 20000);
+    this._presTimer = setInterval(() => this.presencePollTick(), 12000);
   }
   componentWillUnmount() {
     window.removeEventListener('keydown', this._key);
@@ -801,6 +805,7 @@ export default class App extends React.Component<any, any> {
     window.removeEventListener('keydown', this._activity);
     window.removeEventListener('mousedown', this._activity);
     clearTimeout(this._ct); clearInterval(this._tr); clearInterval(this._idle);
+    clearInterval(this._hbTimer); clearInterval(this._presTimer);
   }
   hashAndSetLock = async (pw) => {
     if (!pw) return;
@@ -1230,6 +1235,37 @@ export default class App extends React.Component<any, any> {
     }
   }
   handlePaneClosed(tab, paneId) { this.setPaneConnected(tab.id, paneId, false); }
+
+  // ---- Team presence: report which team connection each live SSH pane is on, poll who's active ----
+  presenceHeartbeatTick() {
+    if (!teams.isSignedIn()) return;
+    const seen = new Set();
+    for (const t of this.state.tabs) {
+      for (const p of (t.panes || [])) {
+        const h = p.live && p.host;
+        if (h && h.teamId && h.connId && !seen.has(h.teamId + ':' + h.connId)) {
+          seen.add(h.teamId + ':' + h.connId);
+          void teams.heartbeat(h.teamId, h.connId);
+        }
+      }
+    }
+  }
+  async presencePollTick() {
+    if (!teams.isSignedIn()) {
+      if (Object.keys(this.state.teamPresence || {}).length) this.setState({ teamPresence: {} });
+      return;
+    }
+    const me = teams.currentUserId();
+    const map = {};
+    for (const m of teams.currentMemberships()) {
+      const entries = await teams.getPresence(m.teamId);
+      for (const e of entries) {
+        if (e.userId === me) continue; // don't show yourself
+        (map[e.connectionId] = map[e.connectionId] || []).push(e);
+      }
+    }
+    this.setState({ teamPresence: map });
+  }
   handlePaneError(tab, paneId, msg) {
     this.setPaneConnected(tab.id, paneId, false);
     const c = this.state.connecting;
@@ -2081,6 +2117,7 @@ export default class App extends React.Component<any, any> {
       return {
         id: h.id, name: h.name, target: h.user + '@' + h.addr, port: h.port, folder: h.folder, lastUsed: h.lastUsed,
         authIcon: authIconOf(h.auth), authLabel: authLabelOf(h.auth), isTeam,
+        presence: (this.state.teamPresence || {})[h.connId] || [],
         tags: h.tags.map(t => ({ name: t })),
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
         cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : isTeam ? '#0b1310' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.4)' : '#1c1c24'), borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
@@ -2552,6 +2589,12 @@ export default class App extends React.Component<any, any> {
                               <span style={card.dotStyle}></span>
                               <span style={css("flex:1;min-width:0;font-size:14px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
                               {card.isTeam && (<span title="Shared by your team" style={css("font-size:8.5px;letter-spacing:.08em;color:#46d9a0;background:rgba(70,217,160,.14);border-radius:4px;padding:2px 6px;flex:none;")}>TEAM</span>)}
+                              {card.presence.length > 0 && (
+                                <span title={card.presence.map((p) => p.displayName).join(', ') + ' · on this connection now'} style={css("display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.05em;color:#2ecc71;background:rgba(46,204,113,.14);border-radius:4px;padding:2px 7px;flex:none;")}>
+                                  <span className="aca-livedot"></span>
+                                  {card.presence.length === 1 ? card.presence[0].displayName : card.presence.length + ' live'}
+                                </span>
+                              )}
                               {card.favorite && (<span title="Favorite" style={css("font-size:12px;color:#ffcf5c;flex:none;")}>★</span>)}
                               <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;flex:none;")}>{card.authIcon} {card.authLabel}</span>
                             </div>

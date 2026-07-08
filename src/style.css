@@ -178,3 +178,20 @@ body {
     animation: none;
   }
 }
+/* Live-presence dot on team connection cards (a teammate is on it now). */
+.aca-livedot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ecc71;
+  flex: none;
+  animation: acaLivePulse 1.6s ease-out infinite;
+}
+@keyframes acaLivePulse {
+  0% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.55); }
+  70% { box-shadow: 0 0 0 5px rgba(46, 204, 113, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aca-livedot { animation: none; }
+}

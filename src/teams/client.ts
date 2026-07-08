@@ -166,6 +166,37 @@ export async function signIn(
   return { user: me.user, memberships: cachedMemberships };
 }
 
+// ---- Presence (who's active on a team connection) ------------------------
+export const currentUserId = (): string | null => (vault ? vault.userId : null);
+
+export interface PresenceEntry {
+  sessionId: string | null;
+  connectionId: string;
+  userId: string;
+  displayName: string;
+  kind: string;
+}
+
+// Report that this app is connected to a team connection (metadata only — no secrets). Best-effort.
+export async function heartbeat(teamId: string, connectionId: string): Promise<void> {
+  if (!vault) return;
+  try {
+    await req('POST', `/v1/teams/${teamId}/presence/heartbeat`, { connectionId });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getPresence(teamId: string): Promise<PresenceEntry[]> {
+  if (!vault) return [];
+  try {
+    const r = await req('GET', `/v1/teams/${teamId}/presence`);
+    return r.presence ?? [];
+  } catch {
+    return [];
+  }
+}
+
 // ---- Device linking (no email/password typed in the app) ----------------
 // The app generates an ephemeral keypair, opens the web app, and the browser (already unlocked)
 // seals the identity + a fresh desktop session to linkEph.publicKey. We poll for it and unseal
