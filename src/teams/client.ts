@@ -166,6 +166,37 @@ export async function signIn(
   return { user: me.user, memberships: cachedMemberships };
 }
 
+// ---- Presence (who's active on a team connection) ------------------------
+export const currentUserId = (): string | null => (vault ? vault.userId : null);
+
+export interface PresenceEntry {
+  sessionId: string | null;
+  connectionId: string;
+  userId: string;
+  displayName: string;
+  kind: string;
+}
+
+// Report that this app is connected to a team connection (metadata only — no secrets). Best-effort.
+export async function heartbeat(teamId: string, connectionId: string): Promise<void> {
+  if (!vault) return;
+  try {
+    await req('POST', `/v1/teams/${teamId}/presence/heartbeat`, { connectionId });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getPresence(teamId: string): Promise<PresenceEntry[]> {
+  if (!vault) return [];
+  try {
+    const r = await req('GET', `/v1/teams/${teamId}/presence`);
+    return r.presence ?? [];
+  } catch {
+    return [];
+  }
+}
+
 // ---- Device linking (no email/password typed in the app) ----------------
 // The app generates an ephemeral keypair, opens the web app, and the browser (already unlocked)
 // seals the identity + a fresh desktop session to linkEph.publicKey. We poll for it and unseal
@@ -217,28 +248,31 @@ async function ensureTeamKey(teamId: string): Promise<{ tk: Uint8Array; keyGener
   const cached = teamKeys.get(teamId);
   if (cached) return cached;
 
-  let w: any;
+  const { team } = await req('GET', `/v1/teams/${teamId}`);
   try {
-    w = await req('GET', `/v1/teams/${teamId}/keys/wrap`);
+    const w = await req('GET', `/v1/teams/${teamId}/keys/wrap`);
+    // Ed25519-verify the wrap signature (anti server-key-substitution) then sealed-box open.
+    const tk = await C.verifyAndOpenTeamKeyWrap(
+      C.unb64(w.wrappedTeamKey), C.unb64(w.sig), vault.identity, C.unb64(w.wrappedByEd25519Pub), teamId, vault.userId, w.keyGeneration,
+    );
+    const entry = { tk, keyGeneration: w.keyGeneration };
+    teamKeys.set(teamId, entry);
+    return entry;
   } catch (err) {
-    if (err instanceof TeamsError && err.status === 404) {
-      throw new TeamsError(404, 'No Team Key shared with you yet — ask an admin to share it from the web app', 'no_wrap');
+    const noWrap = err instanceof TeamsError && err.status === 404;
+    const role = cachedMemberships.find((m) => m.teamId === teamId)?.role ?? '';
+    if (noWrap && (role === 'OWNER' || role === 'ADMIN')) {
+      // First use of this team by an admin: bootstrap a fresh Team Key and self-wrap it.
+      const tk = await C.newTeamKey();
+      const sw = await C.wrapTeamKeyToMember(tk, vault.identity.x25519.publicKey, vault.identity.ed25519.secretKey, teamId, vault.userId, team.keyGeneration);
+      await req('POST', `/v1/teams/${teamId}/keys/wraps`, { keyGeneration: team.keyGeneration, wraps: [{ userId: vault.userId, wrappedTeamKey: C.b64(sw.wrap), sig: C.b64(sw.sig) }] });
+      const entry = { tk, keyGeneration: team.keyGeneration };
+      teamKeys.set(teamId, entry);
+      return entry;
     }
+    if (noWrap) throw new TeamsError(404, 'No Team Key shared with you yet — ask an admin to share it.', 'no_wrap');
     throw err;
   }
-  // Ed25519-verify the wrap signature (anti server-key-substitution) then sealed-box open.
-  const tk = await C.verifyAndOpenTeamKeyWrap(
-    C.unb64(w.wrappedTeamKey),
-    C.unb64(w.sig),
-    vault.identity,
-    C.unb64(w.wrappedByEd25519Pub),
-    teamId,
-    vault.userId,
-    w.keyGeneration,
-  );
-  const entry = { tk, keyGeneration: w.keyGeneration };
-  teamKeys.set(teamId, entry);
-  return entry;
 }
 
 export async function listConnections(teamId: string): Promise<TeamConn[]> {
@@ -276,4 +310,95 @@ export async function listActivity(
 ): Promise<Record<string, { lastUsedAt: string; actorName: string }>> {
   const { activity } = await req('GET', `/v1/teams/${teamId}/connections/activity`);
   return activity ?? {};
+}
+
+// ---- Team management (all in the app now) --------------------------------
+export interface TeamMember {
+  id: string;
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+}
+export interface TeamInvite {
+  id: string;
+  email: string;
+  role: string;
+  code: string | null;
+  expiresAt: string;
+}
+export interface MyInvite {
+  id: string;
+  teamId: string;
+  teamName: string;
+  role: string;
+  expiresAt: string;
+}
+
+// Create a team, then refresh memberships (so the new team shows up immediately).
+export async function createTeam(name: string): Promise<Membership[]> {
+  await req('POST', '/v1/teams', { name });
+  return loadMemberships();
+}
+
+export async function listMembers(teamId: string): Promise<TeamMember[]> {
+  const { members } = await req('GET', `/v1/teams/${teamId}/members`);
+  return members ?? [];
+}
+export async function changeMemberRole(teamId: string, memberId: string, role: string): Promise<void> {
+  await req('PATCH', `/v1/teams/${teamId}/members/${memberId}`, { role });
+}
+export async function removeMember(teamId: string, memberId: string): Promise<void> {
+  await req('DELETE', `/v1/teams/${teamId}/members/${memberId}`);
+}
+
+// Invite by email → returns the shareable code.
+export async function inviteMember(teamId: string, email: string, role: string): Promise<string> {
+  const r = await req('POST', `/v1/teams/${teamId}/invites`, { email, role });
+  return r.code as string;
+}
+export async function getTeamInvites(teamId: string): Promise<TeamInvite[]> {
+  const { invites } = await req('GET', `/v1/teams/${teamId}/invites`);
+  return invites ?? [];
+}
+export async function listMyInvites(): Promise<MyInvite[]> {
+  const { invites } = await req('GET', '/v1/invites/mine');
+  return invites ?? [];
+}
+export async function acceptInvite(inviteId: string): Promise<Membership[]> {
+  await req('POST', `/v1/invites/${inviteId}/accept`);
+  return loadMemberships();
+}
+export async function rejectInvite(inviteId: string): Promise<void> {
+  await req('POST', `/v1/invites/${inviteId}/reject`);
+}
+
+// Wrap the Team Key to every current member (owner/admin) so they can decrypt. Idempotent.
+export async function shareTeamKey(teamId: string): Promise<number> {
+  if (!vault) throw new TeamsError(401, 'Not signed in', 'locked');
+  const { tk, keyGeneration } = await ensureTeamKey(teamId);
+  const { members } = await req('GET', `/v1/teams/${teamId}/keys/members`);
+  const wraps = await Promise.all(
+    (members as { userId: string; x25519Pub: string }[]).map(async (m) => {
+      const w = await C.wrapTeamKeyToMember(tk, C.unb64(m.x25519Pub), vault!.identity.ed25519.secretKey, teamId, m.userId, keyGeneration);
+      return { userId: m.userId, wrappedTeamKey: C.b64(w.wrap), sig: C.b64(w.sig) };
+    }),
+  );
+  await req('POST', `/v1/teams/${teamId}/keys/wraps`, { keyGeneration, wraps });
+  return wraps.length;
+}
+
+// Create a shared connection in a team/vault: seal meta + secret under the Team Key, then upload.
+export async function createConnection(teamId: string, meta: TeamConnMeta, secret: TeamConnSecret): Promise<void> {
+  const { tk, keyGeneration } = await ensureTeamKey(teamId);
+  const connId = crypto.randomUUID();
+  const encBlob = await C.sealMeta(meta, tk, connId);
+  const sealed = await C.sealConnection(secret, tk, connId, keyGeneration);
+  await req('POST', `/v1/teams/${teamId}/connections`, {
+    id: connId,
+    encBlob: C.b64(encBlob),
+    cipher: 'XCHACHA20_POLY1305',
+    keyGeneration,
+    secret: { ciphertext: C.b64(sealed.ciphertext), wrappedDek: C.b64(sealed.wrappedDek) },
+  });
 }

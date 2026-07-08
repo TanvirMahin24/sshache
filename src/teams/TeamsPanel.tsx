@@ -17,6 +17,8 @@ interface Props {
   defaults: { apiUrl: string; email: string };
   onImport: (args: ImportArgs) => void;
   onRemember: (apiUrl: string, email: string) => void;
+  onSync: (force?: boolean) => Promise<number | undefined>;
+  onGoDashboard: () => void;
 }
 
 const box: React.CSSProperties = {
@@ -57,8 +59,8 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: Props): React.ReactElement {
-  const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://api.sshache.com');
+export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGoDashboard }: Props): React.ReactElement {
+  const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://platform.sshache.com');
   const [email, setEmail] = useState(defaults.email || '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -69,15 +71,41 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [teamId, setTeamId] = useState('');
   const [conns, setConns] = useState<teams.TeamConn[]>([]);
   const [connErr, setConnErr] = useState('');
-  const [imported, setImported] = useState<Record<string, boolean>>({});
-  const [importing, setImporting] = useState<Record<string, boolean>>({});
   const [activity, setActivity] = useState<Record<string, { lastUsedAt: string; actorName: string }>>({});
   const [linking, setLinking] = useState<{ code: string; linkId: string } | null>(null);
   const [linkErr, setLinkErr] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
+  // Team management (all in the app now).
+  const [members, setMembers] = useState<teams.TeamMember[]>([]);
+  const [teamInvites, setTeamInvites] = useState<teams.TeamInvite[]>([]);
+  const [myInvites, setMyInvites] = useState<teams.MyInvite[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('MEMBER');
+  const [newTeamName, setNewTeamName] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [mgmtBusy, setMgmtBusy] = useState(false);
+  const [mgmtMsg, setMgmtMsg] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const teamName = memberships.find((m) => m.teamId === teamId)?.teamName ?? '';
+  const role = memberships.find((m) => m.teamId === teamId)?.role ?? '';
+  const canManage = role === 'OWNER' || role === 'ADMIN';
+
+  // Auto-sync team connections into the local vault (no manual import). Runs after sign-in/link.
+  async function runSync(force?: boolean): Promise<void> {
+    setSyncing(true);
+    setSyncMsg('');
+    try {
+      const n = await onSync(force);
+      setSyncMsg(n ? `Synced ${n} connection${n === 1 ? '' : 's'} — they're in your Connections list.` : 'Connections are up to date.');
+    } catch {
+      setSyncMsg('Sync failed — try again.');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
 
   // On (re)mount while already signed in — e.g. returning to Teams after importing a connection
   // and visiting the Dashboard — the vault persists in the client module but this component's
@@ -95,6 +123,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
       }
       setMemberships(ms);
       if (ms.length) void loadTeam(ms[0].teamId);
+      void runSync(); void loadMyInvites();
     })();
   }, []);
 
@@ -121,6 +150,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
               setSignedIn(true);
               setMemberships(r.memberships ?? []);
               if (r.memberships?.length) void loadTeam(r.memberships[0].teamId);
+              void runSync(); void loadMyInvites();
             } else if (r.status === 'expired' || r.status === 'claimed') {
               if (pollRef.current) clearInterval(pollRef.current);
               setLinking(null);
@@ -156,6 +186,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
       setSignedIn(true);
       setMemberships(ms);
       if (ms.length) void loadTeam(ms[0].teamId);
+      void runSync(); void loadMyInvites();
     } catch (e2: any) {
       setErr(e2?.message ?? String(e2));
     } finally {
@@ -168,32 +199,120 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     setConnErr('');
     setConns([]);
     setActivity({});
+    setMembers([]);
+    setTeamInvites([]);
+    setMgmtMsg('');
     try {
       setConns(await teams.listConnections(id));
     } catch (e: any) {
       setConnErr(e?.message ?? String(e));
     }
-    // Admins/Auditors see per-connection last-activity (best-effort; 403 for others).
-    const role = teams.currentMemberships().find((m) => m.teamId === id)?.role ?? '';
-    if (['OWNER', 'ADMIN', 'AUDITOR'].includes(role)) {
+    const r = teams.currentMemberships().find((m) => m.teamId === id)?.role ?? '';
+    // Members (any member); activity + pending invites (admin/auditor).
+    try {
+      setMembers(await teams.listMembers(id));
+    } catch {
+      /* ignore */
+    }
+    if (['OWNER', 'ADMIN', 'AUDITOR'].includes(r)) {
       try {
         setActivity(await teams.listActivity(id));
       } catch {
-        /* ignore — activity is best-effort */
+        /* best-effort */
+      }
+    }
+    if (r === 'OWNER' || r === 'ADMIN') {
+      try {
+        setTeamInvites(await teams.getTeamInvites(id));
+      } catch {
+        /* best-effort */
       }
     }
   }
 
-  async function importOne(c: teams.TeamConn): Promise<void> {
-    setImporting((s) => ({ ...s, [c.id]: true }));
+  async function loadMyInvites(): Promise<void> {
     try {
-      const secret = await teams.revealSecret(teamId, c.id);
-      onImport({ meta: c.meta, secret, teamName });
-      setImported((s) => ({ ...s, [c.id]: true }));
-    } catch (e: any) {
-      setConnErr(e?.message ?? String(e));
+      setMyInvites(await teams.listMyInvites());
+    } catch {
+      setMyInvites([]);
+    }
+  }
+
+  // ---- management actions ----
+  async function createTeamNow(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    const name = newTeamName.trim();
+    if (!name) return;
+    setMgmtBusy(true);
+    setMgmtMsg('');
+    try {
+      const ms = await teams.createTeam(name);
+      setMemberships(ms);
+      setNewTeamName('');
+      setShowCreate(false);
+      const created = ms.find((m) => m.teamName === name);
+      if (created) await loadTeam(created.teamId);
+      setMgmtMsg(`Created "${name}".`);
+    } catch (e2: any) {
+      setMgmtMsg(e2?.message ?? String(e2));
     } finally {
-      setImporting((s) => ({ ...s, [c.id]: false }));
+      setMgmtBusy(false);
+    }
+  }
+  async function doInvite(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    setMgmtBusy(true);
+    setMgmtMsg('');
+    try {
+      const code = await teams.inviteMember(teamId, inviteEmail.trim(), inviteRole);
+      setInviteEmail('');
+      setMgmtMsg(`Invited. Share this code so they can join: ${code}`);
+      setTeamInvites(await teams.getTeamInvites(teamId));
+    } catch (e2: any) {
+      setMgmtMsg(e2?.message ?? String(e2));
+    } finally {
+      setMgmtBusy(false);
+    }
+  }
+  async function doShareKeys(): Promise<void> {
+    setMgmtBusy(true);
+    setMgmtMsg('');
+    try {
+      const n = await teams.shareTeamKey(teamId);
+      setMgmtMsg(`Team key shared with ${n} member${n === 1 ? '' : 's'} — they can now decrypt.`);
+    } catch (e2: any) {
+      setMgmtMsg(e2?.message ?? String(e2));
+    } finally {
+      setMgmtBusy(false);
+    }
+  }
+  async function doRemove(memberId: string): Promise<void> {
+    setMgmtBusy(true);
+    try {
+      await teams.removeMember(teamId, memberId);
+      setMembers(await teams.listMembers(teamId));
+    } catch (e2: any) {
+      setMgmtMsg(e2?.message ?? String(e2));
+    } finally {
+      setMgmtBusy(false);
+    }
+  }
+  async function actInvite(id: string, kind: 'accept' | 'reject'): Promise<void> {
+    setMgmtBusy(true);
+    try {
+      if (kind === 'accept') {
+        const ms = await teams.acceptInvite(id);
+        setMemberships(ms);
+        void runSync(true);
+      } else {
+        await teams.rejectInvite(id);
+      }
+      await loadMyInvites();
+    } catch (e2: any) {
+      setMgmtMsg(e2?.message ?? String(e2));
+    } finally {
+      setMgmtBusy(false);
     }
   }
 
@@ -203,7 +322,6 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     setMemberships([]);
     setConns([]);
     setTeamId('');
-    setImported({});
   }
 
   if (!signedIn) {
@@ -287,11 +405,37 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     <div style={{ maxWidth: 760, margin: '24px auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0 }}>Teams</h2>
-        <button style={btn()} onClick={signOut}>Sign out</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={btn(true)} disabled={syncing} onClick={() => void runSync(true)}>{syncing ? 'Syncing…' : '↻ Sync now'}</button>
+          <button style={btn()} onClick={() => setShowCreate((v) => !v)}>+ New team</button>
+          <button style={btn()} onClick={signOut}>Sign out</button>
+        </div>
       </div>
 
+      {showCreate && (
+        <form onSubmit={createTeamNow} style={{ ...box, margin: '14px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input style={{ ...input, marginTop: 0, flex: 1 }} value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="Team name" />
+          <button style={btn(true)} type="submit" disabled={mgmtBusy || !newTeamName.trim()}>Create</button>
+        </form>
+      )}
+
+      {myInvites.length > 0 && (
+        <div style={{ ...box, margin: '16px 0', borderColor: 'var(--accent, #46d9a0)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>You've been invited</div>
+          {myInvites.map((iv) => (
+            <div key={iv.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '6px 0' }}>
+              <span>{iv.teamName} <span style={{ color: 'var(--muted)', fontSize: 13 }}>· join as {iv.role.toLowerCase()}</span></span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button style={btn(true)} disabled={mgmtBusy} onClick={() => void actInvite(iv.id, 'accept')}>Join</button>
+                <button style={btn()} disabled={mgmtBusy} onClick={() => void actInvite(iv.id, 'reject')}>Reject</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {memberships.length === 0 ? (
-        <p style={{ color: 'var(--muted)' }}>You are not a member of any team yet.</p>
+        <p style={{ color: 'var(--muted)' }}>No teams yet. Create one above, or accept an invitation.</p>
       ) : (
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '16px 0' }}>
@@ -307,6 +451,12 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
           </div>
 
           {connErr && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13 }}>{connErr}</p>}
+          {syncMsg && <p style={{ color: 'var(--accent, #46d9a0)', fontSize: 13, margin: '0 0 4px' }}>{syncMsg}</p>}
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>Shared connections sync into your Connections list automatically — no import needed.</span>
+            <button style={btn()} onClick={onGoDashboard}>Open Connections →</button>
+          </div>
 
           {teamId && !connErr && conns.length === 0 && (
             <p style={{ color: 'var(--muted)' }}>No shared connections in this team.</p>
@@ -326,16 +476,59 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
                     </div>
                   )}
                 </div>
-                <button
-                  style={btn(!imported[c.id])}
-                  disabled={!!importing[c.id] || !!imported[c.id]}
-                  onClick={() => void importOne(c)}
-                >
-                  {imported[c.id] ? 'Imported ✓' : importing[c.id] ? 'Importing…' : 'Import'}
-                </button>
+                <span style={{ color: 'var(--accent, #46d9a0)', fontSize: 12.5, fontWeight: 600, flex: 'none' }}>✓ Synced</span>
               </div>
             ))}
           </div>
+
+          {teamId && (
+            <>
+              <div style={{ ...box, marginTop: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 600 }}>Members ({members.length})</div>
+                  {canManage && <button style={btn()} disabled={mgmtBusy} onClick={() => void doShareKeys()} title="Wrap the team key to every member so they can decrypt">🔑 Share keys</button>}
+                </div>
+                {members.map((m) => (
+                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '6px 0' }}>
+                    <span>{m.displayName} <span style={{ color: 'var(--muted)', fontSize: 13 }}>· {m.email}</span></span>
+                    <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ color: 'var(--muted)', fontSize: 12 }}>{m.role.toLowerCase()}</span>
+                      {canManage && m.role !== 'OWNER' && m.userId !== teams.currentUserId() && (
+                        <button style={{ ...btn(), color: 'var(--danger, #ff6b6b)', fontSize: 12 }} disabled={mgmtBusy} onClick={() => void doRemove(m.id)}>Remove</button>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {canManage && (
+                <div style={{ ...box, marginTop: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 10 }}>Invite a member</div>
+                  <form onSubmit={doInvite} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input style={{ ...input, marginTop: 0, flex: 1, minWidth: 180 }} type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="teammate@company.dev" />
+                    <select style={{ ...input, marginTop: 0, width: 'auto' }} value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                      <option value="MEMBER">Member</option>
+                      <option value="ADMIN">Admin</option>
+                    </select>
+                    <button style={btn(true)} type="submit" disabled={mgmtBusy || !inviteEmail.trim()}>Invite</button>
+                  </form>
+                  {teamInvites.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 6 }}>Pending invitations</div>
+                      {teamInvites.map((iv) => (
+                        <div key={iv.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '4px 0', fontSize: 13 }}>
+                          <span>{iv.email} <span style={{ color: 'var(--muted)' }}>· {iv.role.toLowerCase()}</span></span>
+                          {iv.code && <code style={{ color: 'var(--accent, #46d9a0)', fontSize: 12 }}>{iv.code}</code>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {mgmtMsg && <p style={{ color: 'var(--accent, #46d9a0)', fontSize: 13, wordBreak: 'break-all', marginTop: 10 }}>{mgmtMsg}</p>}
+            </>
+          )}
         </>
       )}
     </div>
