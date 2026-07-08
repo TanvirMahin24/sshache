@@ -56,13 +56,25 @@ let base = '';
 let accessToken = '';
 let refreshToken = '';
 let vault: Vault | null = null;
+// Cached across TeamsPanel unmount/remount (view switches): the vault lives in this module, so
+// the UI must restore its memberships from here rather than re-init to [] and render blank.
+let cachedMemberships: Membership[] = [];
 const teamKeys = new Map<string, { tk: Uint8Array; keyGeneration: number }>();
 
 export const isSignedIn = (): boolean => vault !== null;
 export const getBase = (): string => base;
+export const currentMemberships = (): Membership[] => cachedMemberships;
+
+// Re-fetch memberships for an already-unlocked session (used to repopulate the UI on remount).
+export async function loadMemberships(): Promise<Membership[]> {
+  const me = await req('GET', '/v1/auth/me');
+  cachedMemberships = me.memberships ?? [];
+  return cachedMemberships;
+}
 
 export function signOut(): void {
   vault = null;
+  cachedMemberships = [];
   accessToken = '';
   refreshToken = '';
   teamKeys.clear();
@@ -149,7 +161,8 @@ export async function signIn(
   vault = { userId: login.data.user.id, email, identity };
 
   const me = await req('GET', '/v1/auth/me');
-  return { user: me.user, memberships: me.memberships ?? [] };
+  cachedMemberships = me.memberships ?? [];
+  return { user: me.user, memberships: cachedMemberships };
 }
 
 // ---- Team key + connections ---------------------------------------------
