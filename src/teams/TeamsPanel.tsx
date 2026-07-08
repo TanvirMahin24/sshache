@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import * as teams from './client.js';
 
 // The "Teams" view: sign into SSH Ache Teams (the sshache-sass SaaS), browse a team's shared
@@ -54,7 +54,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [err, setErr] = useState('');
 
   const [signedIn, setSignedIn] = useState(teams.isSignedIn());
-  const [memberships, setMemberships] = useState<teams.Membership[]>([]);
+  const [memberships, setMemberships] = useState<teams.Membership[]>(teams.currentMemberships());
   const [teamId, setTeamId] = useState('');
   const [conns, setConns] = useState<teams.TeamConn[]>([]);
   const [connErr, setConnErr] = useState('');
@@ -62,6 +62,25 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [importing, setImporting] = useState<Record<string, boolean>>({});
 
   const teamName = memberships.find((m) => m.teamId === teamId)?.teamName ?? '';
+
+  // On (re)mount while already signed in — e.g. returning to Teams after importing a connection
+  // and visiting the Dashboard — the vault persists in the client module but this component's
+  // team/connection state was reset, which rendered a blank Teams view. Restore + reload here.
+  useEffect(() => {
+    if (!signedIn || teamId) return;
+    void (async () => {
+      let ms = teams.currentMemberships();
+      if (!ms.length) {
+        try {
+          ms = await teams.loadMemberships();
+        } catch {
+          return;
+        }
+      }
+      setMemberships(ms);
+      if (ms.length) void loadTeam(ms[0].teamId);
+    })();
+  }, []);
 
   async function doSignIn(e: React.FormEvent): Promise<void> {
     e.preventDefault();
