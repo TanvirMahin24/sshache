@@ -186,3 +186,21 @@ export function generateEscrowKeypair(): KeyPair {
   const priv = x25519.utils.randomPrivateKey();
   return { publicKey: x25519.getPublicKey(priv), secretKey: priv };
 }
+
+// Rebuild an Identity from its 64-byte secret (x25519Priv[32] || ed25519Seed[32]). Used by device
+// linking: the browser seals these bytes to the desktop's ephemeral key, so the desktop unlocks
+// the same vault WITHOUT deriving from a password. Mirrors openUnder's reconstruction.
+export function identityFromSecret(secret: Uint8Array): Identity {
+  const xPriv = secret.subarray(0, 32);
+  const ePriv = secret.subarray(32, 64);
+  return {
+    x25519: { publicKey: x25519.getPublicKey(xPriv), secretKey: xPriv },
+    ed25519: { publicKey: ed25519.getPublicKey(ePriv), secretKey: ePriv },
+  };
+}
+
+// Ephemeral X25519 keypair for a one-shot device-link handshake (discarded after unsealing).
+export function newEphemeralKeypair(): KeyPair {
+  const priv = x25519.utils.randomPrivateKey();
+  return { publicKey: x25519.getPublicKey(priv), secretKey: priv };
+}
