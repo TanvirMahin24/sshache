@@ -2030,7 +2030,7 @@ export default class App extends React.Component<any, any> {
         authIcon: authIconOf(h.auth), authLabel: authLabelOf(h.auth), isTeam,
         tags: h.tags.map(t => ({ name: t })),
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
-        cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : isTeam ? '#0b1310' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.4)' : '#1c1c24'), borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
+        cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.5)' : '#1c1c24'), boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none', borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
         onConnect: () => this.connectHost(h),
         onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
