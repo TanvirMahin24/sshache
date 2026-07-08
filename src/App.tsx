@@ -1576,6 +1576,28 @@ export default class App extends React.Component<any, any> {
     this.pushToast({ type: 'ok', title: existing ? 'Updated from Teams' : 'Imported from Teams', msg: meta.name });
   }
 
+  // Push a local connection up to the personal cloud vault (E2EE): seal + upload, then convert the
+  // local host into a synced vault host in place (no duplicate). Needs a signed-in Teams session.
+  async saveToVault(h) {
+    if (!teams.isSignedIn()) {
+      this.pushToast({ type: 'info', title: 'Teams', msg: 'Sign in to Teams first, then save to your vault.' });
+      this.setView('teams');
+      return;
+    }
+    const teamId = teams.personalTeamId();
+    if (!teamId) { this.pushToast({ type: 'err', title: 'No vault', msg: 'Personal vault not found — sign in again.' }); return; }
+    try {
+      const secret = (await secretGet(h.id)) || {};
+      const meta = { schema: 1, name: h.name, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth === 'key' ? 'key' : 'password' };
+      const sec = { schema: 1, password: secret.password ?? null, passphrase: secret.passphrase ?? null, keyText: secret.keyText ?? null };
+      const connId = await teams.createConnection(teamId, meta, sec);
+      this.setState((s) => ({ hosts: s.hosts.map((x) => (x.id === h.id ? { ...x, teamId, connId, connVersion: 1, folder: 'Team · Personal', tags: Array.from(new Set([...(x.tags || []), 'team'])) } : x)) }));
+      this.pushToast({ type: 'ok', title: 'Saved to cloud vault', msg: h.name });
+    } catch (e) {
+      this.pushToast({ type: 'err', title: 'Save failed', msg: String(e) });
+    }
+  }
+
   // ---- Auto-sync team connections into the vault (no manual import) ----
   // Pull every shared connection for the signed-in teams, decrypt locally, and upsert into the
   // host list keyed by the cloud connection id. A secret is only re-revealed when the connection
@@ -2125,6 +2147,8 @@ export default class App extends React.Component<any, any> {
         onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
         onExport: (e) => { e.stopPropagation(); this.exportHost(h); },
+        isLocal: !h.connId, // not yet synced to a team/vault
+        onSaveVault: (e) => { e.stopPropagation(); void this.saveToVault(h); },
         favorite: !!h.favorite,
         onToggleFav: (e) => { e.stopPropagation(); this.toggleHostFav(h.id); },
       };
@@ -2602,6 +2626,7 @@ export default class App extends React.Component<any, any> {
                               <Hov onClick={card.onToggleFav} title={card.favorite ? 'Unfavorite' : 'Favorite'} s={{ width: '25px', height: '25px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#9a9aa3', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', background: '#101015' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
                               <Hov onClick={card.onCopy} title="Copy ssh command" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:11px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⧉</Hov>
                               <Hov onClick={card.onExport} title="Export connection" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:12px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⤓</Hov>
+                              {card.isLocal && (<Hov onClick={card.onSaveVault} title="Save to cloud vault (sync across your devices)" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:12px;background:#101015;" h="background:rgba(70,217,160,.14);color:#46d9a0;border-color:rgba(70,217,160,.4);">☁</Hov>)}
                               <Hov onClick={card.onEdit} title="Edit connection" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:11px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
                             </div>
                             <div style={css("font-size:11.5px;color:#9a9aa3;font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.target}<span style={css("color:#54545e;")}>:{card.port}</span></div>
