@@ -15,6 +15,7 @@ export interface Membership {
   teamName: string;
   role: string;
   planTier: string;
+  isPersonal?: boolean;
 }
 export interface TeamConnMeta {
   schema: 1;
@@ -389,7 +390,7 @@ export async function shareTeamKey(teamId: string): Promise<number> {
 }
 
 // Create a shared connection in a team/vault: seal meta + secret under the Team Key, then upload.
-export async function createConnection(teamId: string, meta: TeamConnMeta, secret: TeamConnSecret): Promise<void> {
+export async function createConnection(teamId: string, meta: TeamConnMeta, secret: TeamConnSecret): Promise<string> {
   const { tk, keyGeneration } = await ensureTeamKey(teamId);
   const connId = crypto.randomUUID();
   const encBlob = await C.sealMeta(meta, tk, connId);
@@ -401,4 +402,8 @@ export async function createConnection(teamId: string, meta: TeamConnMeta, secre
     keyGeneration,
     secret: { ciphertext: C.b64(sealed.ciphertext), wrappedDek: C.b64(sealed.wrappedDek) },
   });
+  return connId;
 }
+
+// The user's personal vault team (a single-member isPersonal team), if signed in.
+export const personalTeamId = (): string | null => cachedMemberships.find((m) => m.isPersonal)?.teamId ?? null;
