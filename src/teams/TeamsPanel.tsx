@@ -17,6 +17,8 @@ interface Props {
   defaults: { apiUrl: string; email: string };
   onImport: (args: ImportArgs) => void;
   onRemember: (apiUrl: string, email: string) => void;
+  onSync: (force?: boolean) => Promise<number | undefined>;
+  onGoDashboard: () => void;
 }
 
 const box: React.CSSProperties = {
@@ -57,8 +59,8 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: Props): React.ReactElement {
-  const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://api.sshache.com');
+export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGoDashboard }: Props): React.ReactElement {
+  const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://platform.sshache.com');
   const [email, setEmail] = useState(defaults.email || '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -69,15 +71,28 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
   const [teamId, setTeamId] = useState('');
   const [conns, setConns] = useState<teams.TeamConn[]>([]);
   const [connErr, setConnErr] = useState('');
-  const [imported, setImported] = useState<Record<string, boolean>>({});
-  const [importing, setImporting] = useState<Record<string, boolean>>({});
   const [activity, setActivity] = useState<Record<string, { lastUsedAt: string; actorName: string }>>({});
   const [linking, setLinking] = useState<{ code: string; linkId: string } | null>(null);
   const [linkErr, setLinkErr] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const teamName = memberships.find((m) => m.teamId === teamId)?.teamName ?? '';
+  // Auto-sync team connections into the local vault (no manual import). Runs after sign-in/link.
+  async function runSync(force?: boolean): Promise<void> {
+    setSyncing(true);
+    setSyncMsg('');
+    try {
+      const n = await onSync(force);
+      setSyncMsg(n ? `Synced ${n} connection${n === 1 ? '' : 's'} — they're in your Connections list.` : 'Connections are up to date.');
+    } catch {
+      setSyncMsg('Sync failed — try again.');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
 
   // On (re)mount while already signed in — e.g. returning to Teams after importing a connection
   // and visiting the Dashboard — the vault persists in the client module but this component's
@@ -95,6 +110,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
       }
       setMemberships(ms);
       if (ms.length) void loadTeam(ms[0].teamId);
+      void runSync();
     })();
   }, []);
 
@@ -121,6 +137,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
               setSignedIn(true);
               setMemberships(r.memberships ?? []);
               if (r.memberships?.length) void loadTeam(r.memberships[0].teamId);
+              void runSync();
             } else if (r.status === 'expired' || r.status === 'claimed') {
               if (pollRef.current) clearInterval(pollRef.current);
               setLinking(null);
@@ -156,6 +173,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
       setSignedIn(true);
       setMemberships(ms);
       if (ms.length) void loadTeam(ms[0].teamId);
+      void runSync();
     } catch (e2: any) {
       setErr(e2?.message ?? String(e2));
     } finally {
@@ -184,26 +202,12 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     }
   }
 
-  async function importOne(c: teams.TeamConn): Promise<void> {
-    setImporting((s) => ({ ...s, [c.id]: true }));
-    try {
-      const secret = await teams.revealSecret(teamId, c.id);
-      onImport({ meta: c.meta, secret, teamName });
-      setImported((s) => ({ ...s, [c.id]: true }));
-    } catch (e: any) {
-      setConnErr(e?.message ?? String(e));
-    } finally {
-      setImporting((s) => ({ ...s, [c.id]: false }));
-    }
-  }
-
   function signOut(): void {
     teams.signOut();
     setSignedIn(false);
     setMemberships([]);
     setConns([]);
     setTeamId('');
-    setImported({});
   }
 
   if (!signedIn) {
@@ -287,7 +291,10 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
     <div style={{ maxWidth: 760, margin: '24px auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h2 style={{ margin: 0 }}>Teams</h2>
-        <button style={btn()} onClick={signOut}>Sign out</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={btn(true)} disabled={syncing} onClick={() => void runSync(true)}>{syncing ? 'Syncing…' : '↻ Sync now'}</button>
+          <button style={btn()} onClick={signOut}>Sign out</button>
+        </div>
       </div>
 
       {memberships.length === 0 ? (
@@ -307,6 +314,12 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
           </div>
 
           {connErr && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13 }}>{connErr}</p>}
+          {syncMsg && <p style={{ color: 'var(--accent, #46d9a0)', fontSize: 13, margin: '0 0 4px' }}>{syncMsg}</p>}
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>Shared connections sync into your Connections list automatically — no import needed.</span>
+            <button style={btn()} onClick={onGoDashboard}>Open Connections →</button>
+          </div>
 
           {teamId && !connErr && conns.length === 0 && (
             <p style={{ color: 'var(--muted)' }}>No shared connections in this team.</p>
@@ -326,13 +339,7 @@ export default function TeamsPanel({ isTauri, defaults, onImport, onRemember }: 
                     </div>
                   )}
                 </div>
-                <button
-                  style={btn(!imported[c.id])}
-                  disabled={!!importing[c.id] || !!imported[c.id]}
-                  onClick={() => void importOne(c)}
-                >
-                  {imported[c.id] ? 'Imported ✓' : importing[c.id] ? 'Importing…' : 'Import'}
-                </button>
+                <span style={{ color: 'var(--accent, #46d9a0)', fontSize: 12.5, fontWeight: 600, flex: 'none' }}>✓ Synced</span>
               </div>
             ))}
           </div>

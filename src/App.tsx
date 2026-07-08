@@ -11,6 +11,7 @@
 // calls; typing it now would be churn against code that is about to change.
 import * as React from "react";
 import TeamsPanel from "./teams/TeamsPanel";
+import * as teams from "./teams/client";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
@@ -1538,6 +1539,58 @@ export default class App extends React.Component<any, any> {
     if (Object.keys(sec).length) secretSet(id, sec);
     this.pushToast({ type: 'ok', title: existing ? 'Updated from Teams' : 'Imported from Teams', msg: meta.name });
   }
+
+  // ---- Auto-sync team connections into the vault (no manual import) ----
+  // Pull every shared connection for the signed-in teams, decrypt locally, and upsert into the
+  // host list keyed by the cloud connection id. A secret is only re-revealed when the connection
+  // changed (version bump), and connections removed from the team are pruned. Runs after Teams
+  // sign-in / linking and on demand.
+  async syncAllTeams(force) {
+    if (!teams.isSignedIn()) return;
+    let n = 0;
+    for (const m of teams.currentMemberships()) {
+      n += await this.syncTeam(m.teamId, m.teamName, force).catch(() => 0);
+    }
+    return n;
+  }
+  async syncTeam(teamId, teamName, force) {
+    let conns;
+    try { conns = await teams.listConnections(teamId); } catch { return 0; }
+    const folder = 'Team · ' + (teamName || 'Shared');
+    const ids = new Set(conns.map((c) => c.id));
+    let changed = 0;
+    for (const c of conns) {
+      const existing = this.state.hosts.find((h) => h.connId === c.id);
+      if (!force && existing && existing.connVersion === c.version) continue; // already current
+      let secret = null;
+      try { secret = await teams.revealSecret(teamId, c.id); } catch { /* no access — keep metadata */ }
+      this._upsertTeamHost(teamId, folder, c, secret);
+      changed += 1;
+    }
+    // Prune connections that were removed from the team.
+    this.setState((s) => ({ hosts: s.hosts.filter((h) => h.teamId !== teamId || ids.has(h.connId)) }));
+    return changed;
+  }
+  _upsertTeamHost(teamId, folder, c, secret) {
+    const meta = c.meta;
+    const existing = this.state.hosts.find((h) => h.connId === c.id);
+    const id = existing ? existing.id : this.genId();
+    const auth = meta.auth === 'key' ? 'key' : meta.auth === 'agent' ? 'agent' : 'password';
+    const host = {
+      id, name: meta.name, addr: meta.host, port: String(meta.port || 22), user: meta.user || 'root',
+      auth, keyMode: secret && secret.keyText ? 'text' : 'file', keyPath: '', folder, tags: ['team'],
+      teamId, connId: c.id, connVersion: c.version, jumpHost: '', snippet: '', online: true,
+      lastUsed: existing ? existing.lastUsed : 'never',
+    };
+    this.setState((s) => ({ hosts: existing ? s.hosts.map((h) => (h.id === id ? host : h)) : [...s.hosts, host] }));
+    if (secret) {
+      const sec = {};
+      if (secret.password) sec.password = secret.password;
+      if (secret.passphrase) sec.passphrase = secret.passphrase;
+      if (secret.keyText) sec.keyText = secret.keyText;
+      if (Object.keys(sec).length) secretSet(id, sec);
+    }
+  }
   // Import hosts from ~/.ssh/config. Dedups against the vault by user@addr:port;
   // links ProxyJump to a matching host by alias/name (added or pre-existing).
   async importSshConfig() {
@@ -2411,6 +2464,8 @@ export default class App extends React.Component<any, any> {
                   defaults={v.teamsDefaults}
                   onRemember={(apiUrl, email) => this.rememberTeams(apiUrl, email)}
                   onImport={(args) => this.importTeamHost(args)}
+                  onSync={(force) => this.syncAllTeams(force)}
+                  onGoDashboard={() => this.setView('dashboard')}
                 />
               </div>
             )}
