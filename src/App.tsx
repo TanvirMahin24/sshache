@@ -686,6 +686,7 @@ export default class App extends React.Component<any, any> {
     sftpErr: '',
     sftpW: 392, // resizable terminal↔SFTP split width (px)
     sftpCtx: null, // right-click context menu: { x, y, side, name, isDir }
+    sftpMax: false, // SFTP expanded to fill the workspace (full-screen file manager)
     sftpPrompt: null, // null | { mode:'mkdir'|'rename'|'delete', ... }
     triggerDraft: '', triggerColor: '#ff7a59', // output-trigger add form
     conflict: null,
@@ -1413,7 +1414,7 @@ export default class App extends React.Component<any, any> {
   closeSftp() {
     const id = this.state.sftpId;
     if (id && isTauri) invoke('sftp_disconnect', { id }).catch(() => {});
-    this.setState({ sftpOpen: false, sftpId: null, sftpStatus: 'idle', transfer: null, conflict: null, conflictAll: false, conflictPolicy: null });
+    this.setState({ sftpOpen: false, sftpMax: false, sftpId: null, sftpStatus: 'idle', transfer: null, conflict: null, conflictAll: false, conflictPolicy: null });
   }
   openSftp() {
     const tab = this.state.tabs.find(t => t.id === this.state.activeTabId);
@@ -2101,6 +2102,8 @@ export default class App extends React.Component<any, any> {
       closeFileCtx: () => this.closeFileCtx(),
       ctxOpen: (side, name, isDir) => this.openFileExternal(side, name, isDir),
       ctxReveal: () => this.revealLocal(),
+      sftpMax: s.sftpMax,
+      toggleSftpMax: () => this.setState(st => ({ sftpMax: !st.sftpMax })),
       openPalette: () => this.setState({ paletteOpen: true, paletteQuery: '' }),
       closePalette: () => this.setState({ paletteOpen: false }),
       setPaletteQuery: (e) => this.setState({ paletteQuery: e.target.value }),
@@ -2532,7 +2535,7 @@ export default class App extends React.Component<any, any> {
                 </div>
 
                 {/* WORKSPACE */}
-                <div style={css("flex:1;min-height:0;display:flex;padding:10px;")}>
+                <div style={css("flex:1;min-height:0;display:flex;padding:10px;position:relative;")}>
                   {v.tabPanes.map((tp) => (
                   <div key={tp.id} ref={tp.active ? v.paneWrapRef : null} style={tp.wrapStyle}>
                     {tp.panes.map((pane) => (
@@ -2565,8 +2568,8 @@ export default class App extends React.Component<any, any> {
                   </div>
                   ))}
 
-                  {/* Drag divider — resize the terminal↔SFTP split */}
-                  {v.sftpOpen && (
+                  {/* Drag divider — resize the terminal↔SFTP split (hidden when expanded) */}
+                  {v.sftpOpen && !v.sftpMax && (
                     <div className="aca-resizer" onMouseDown={v.onSftpGutterDown} title="Drag to resize" style={css("width:8px;flex:none;margin-left:4px;display:flex;align-items:center;justify-content:center;cursor:col-resize;")}>
                       <span className="aca-rzbar" style={css("width:2px;height:42px;")}></span>
                     </div>
@@ -2574,12 +2577,13 @@ export default class App extends React.Component<any, any> {
 
                   {/* SFTP PANEL */}
                   {v.sftpOpen && (
-                    <div style={css(`width:${v.sftpW}px;flex:none;margin-left:6px;background:#0b0b0e;border:1px solid #1c1c24;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;animation:acaRise .2s ease;`)}>
+                    <div style={css(`${v.sftpMax ? 'position:absolute;top:10px;right:10px;bottom:10px;left:10px;margin:0;z-index:6' : `width:${v.sftpW}px;flex:none;margin-left:6px`};background:#0b0b0e;border:1px solid #1c1c24;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;animation:acaRise .2s ease;`)}>
                       <div style={css("display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #16161c;")}>
                         <span style={css("color:#ff7a59;")}>⇅</span>
                         <span style={css("font-size:12px;font-weight:600;color:#ededf0;")}>SFTP</span>
                         <span style={css("font-size:10px;color:#54545e;")}>·&nbsp;drag files between panes</span>
                         <span style={css("flex:1;")}></span>
+                        <Hov onClick={v.toggleSftpMax} title={v.sftpMax ? 'Restore split view' : 'Expand SFTP to full screen'} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;font-size:12px;" h="background:#222;color:#ededf0;">{v.sftpMax ? '⤡' : '⤢'}</Hov>
                         <Hov onClick={v.toggleSftp} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                       </div>
                       {v.sftpReady ? (
