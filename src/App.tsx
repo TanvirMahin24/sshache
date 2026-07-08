@@ -221,6 +221,14 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.4.0', items: [
+    'SFTP: the terminal↔SFTP split is now resizable, folders open on a single click, and ⌘/Shift multi-select works.',
+    'SFTP: right-click a file to open it with a local app; expand SFTP to a full-screen file manager.',
+    'AI agent (MCP): opt-in per-host Auto-allow to skip the approval prompt on a host you trust.',
+    'Teams: connections imported from a team are highlighted, and admins see each shared connection\'s last activity.',
+    'Added this What\'s-new panel.',
+    'SSH Ache is now source-available under the PolyForm Noncommercial license.',
+  ] },
   { version: '0.3.1', items: ['Teams: fixed the connection list going blank right after importing shared connections.'] },
   { version: '0.3.0', items: ['New Teams module — sign in and import SSH connections your team shares with you, decrypted locally (end-to-end encrypted).'] },
   { version: '0.2.2', items: ['SFTP now matches the terminal for pasted key text, jump hosts and host-key checks, with a real key-file picker.'] },
