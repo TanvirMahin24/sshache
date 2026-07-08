@@ -222,6 +222,12 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.6.0', items: [
+    'Teams, in the app: create teams, invite members (with a shareable code), manage members and roles, share keys, and accept invitations — no need to go to the website.',
+    'Team connections sync into your Connections list automatically (no manual import), and a green badge shows which teammates are on a connection right now.',
+    'Personal cloud vault: click ☁ on any local connection to save it to your account — encrypted end-to-end and synced to every device you sign in on.',
+    'Fixed the team connection card looking wrong on light themes.',
+  ] },
   { version: '0.5.0', items: [
     'Teams: connect the app straight from your browser — log in on the web, type the code the app shows, and it links itself. No email or password typed in the app, and your keys never leave your device unencrypted.',
     'Teams: a dashboard nudge to share connections with a team, and a clearer sign-in that spells out what Teams adds.',
