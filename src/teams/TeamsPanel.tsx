@@ -91,6 +91,7 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
 
   const role = memberships.find((m) => m.teamId === teamId)?.role ?? '';
   const canManage = role === 'OWNER' || role === 'ADMIN';
+  const isPersonalTeam = !!memberships.find((m) => m.teamId === teamId)?.isPersonal;
 
   // Auto-sync team connections into the local vault (no manual import). Runs after sign-in/link.
   async function runSync(force?: boolean): Promise<void> {
@@ -298,6 +299,27 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
       setMgmtBusy(false);
     }
   }
+  async function afterLeaveOrDelete(ms: teams.Membership[]): Promise<void> {
+    setMemberships(ms);
+    const next = ms.find((m) => !m.isPersonal)?.teamId ?? ms[0]?.teamId ?? '';
+    setTeamId(next);
+    if (next) void loadTeam(next); else setMembers([]);
+    void onSync(true); // re-sync so the removed team's connections are pruned locally
+  }
+  async function doLeave(): Promise<void> {
+    if (!window.confirm('Leave this team? You’ll lose access to its shared connections.')) return;
+    setMgmtBusy(true);
+    try { await afterLeaveOrDelete(await teams.leaveTeam(teamId)); }
+    catch (e2: any) { setMgmtMsg(e2?.message ?? String(e2)); }
+    finally { setMgmtBusy(false); }
+  }
+  async function doDelete(): Promise<void> {
+    if (!window.confirm('Delete this team for everyone? This removes all its shared connections and can’t be undone.')) return;
+    setMgmtBusy(true);
+    try { await afterLeaveOrDelete(await teams.deleteTeam(teamId)); }
+    catch (e2: any) { setMgmtMsg(e2?.message ?? String(e2)); }
+    finally { setMgmtBusy(false); }
+  }
   async function actInvite(id: string, kind: 'accept' | 'reject'): Promise<void> {
     setMgmtBusy(true);
     try {
@@ -486,7 +508,11 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
               <div style={{ ...box, marginTop: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                   <div style={{ fontWeight: 600 }}>Members ({members.length})</div>
-                  {canManage && <button style={btn()} disabled={mgmtBusy} onClick={() => void doShareKeys()} title="Wrap the team key to every member so they can decrypt">🔑 Share keys</button>}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {canManage && <button style={btn()} disabled={mgmtBusy} onClick={() => void doShareKeys()} title="Wrap the team key to every member so they can decrypt">🔑 Share keys</button>}
+                    {!isPersonalTeam && <button style={{ ...btn(), color: 'var(--danger, #ff6b6b)', fontSize: 12 }} disabled={mgmtBusy} onClick={() => void doLeave()} title="Leave this team">Leave</button>}
+                    {role === 'OWNER' && !isPersonalTeam && <button style={{ ...btn(), color: 'var(--danger, #ff6b6b)', fontSize: 12 }} disabled={mgmtBusy} onClick={() => void doDelete()} title="Delete this team for everyone">Delete team</button>}
+                  </div>
                 </div>
                 {members.map((m) => (
                   <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '6px 0' }}>
