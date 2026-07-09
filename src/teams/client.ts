@@ -171,10 +171,11 @@ export async function signIn(
 export const currentUserId = (): string | null => (vault ? vault.userId : null);
 
 export interface PresenceEntry {
-  sessionId: string | null;
+  sessionId: string | null; // set (shadowable) for web + mirrored native sessions; null = plain heartbeat
   connectionId: string;
   userId: string;
   displayName: string;
+  email?: string;
   kind: string;
 }
 
@@ -196,6 +197,38 @@ export async function getPresence(teamId: string): Promise<PresenceEntry[]> {
   } catch {
     return [];
   }
+}
+
+// ---- Live spectate (watch a teammate's session) --------------------------
+export interface RelayTicket {
+  sessionId: string;
+  relayUrl: string;
+  ticket: string;
+}
+
+// Mirror THIS app's terminal output for a team connection so teammates can watch it (read-only).
+// The SSH stays local; only output is streamed. Returns a relay URL + ticket, or null if unavailable.
+export async function requestMirror(teamId: string, connId: string): Promise<RelayTicket | null> {
+  if (!vault) return null;
+  try {
+    const r = await req('POST', `/v1/teams/${teamId}/connections/${connId}/webterm/mirror`);
+    return { sessionId: r.sessionId, relayUrl: r.relayUrl, ticket: r.ticket };
+  } catch {
+    return null; // best-effort — a failed mirror never breaks the local session
+  }
+}
+
+// Get a read-only ticket to watch an ACTIVE session. Throws on failure (e.g. session ended) so
+// the caller can surface why.
+export async function requestShadow(teamId: string, sessionId: string): Promise<RelayTicket> {
+  if (!vault) throw new Error('Sign in to Teams first');
+  const r = await req('POST', `/v1/teams/${teamId}/webterm/sessions/${sessionId}/shadow`);
+  return { sessionId: r.sessionId, relayUrl: r.relayUrl, ticket: r.ticket };
+}
+
+// Build the relay WebSocket URL carrying the one-time ticket.
+export function relayWsUrl(relayUrl: string, ticket: string): string {
+  return relayUrl + (relayUrl.includes('?') ? '&' : '?') + 'ticket=' + encodeURIComponent(ticket);
 }
 
 // ---- Device linking (no email/password typed in the app) ----------------
