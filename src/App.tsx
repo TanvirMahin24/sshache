@@ -222,6 +222,11 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.1', items: [
+    'Teams: leave a team, or delete a team you own, right from the Teams tab.',
+    'Team connection cards now show online teammates on their own row, and “view session” uses a cleaner marker.',
+    'New teams you create come up on your current plan (Pro/Enterprise) instead of always Free.',
+  ] },
   { version: '0.7.0', items: [
     'Live view mode: on a team connection you can see who’s online and watch a teammate’s session in real time — read-only, in its own tab. Your SSH stays on your machine; only the on-screen output is shared.',
     'Redesigned team presence: an “N online” pill on each shared connection opens a list of active teammates (name + email) with one-click “View session”, and an avatar bar inside an open connection lets you jump straight into anyone’s session.',
