@@ -1678,6 +1678,29 @@ export default class App extends React.Component<any, any> {
     }
   }
 
+  // The teamId for a "Team · <name>" folder, if it maps to one of your teams; else null.
+  _teamForFolder(folder) {
+    if (!teams.isSignedIn() || !folder || !folder.startsWith('Team · ')) return null;
+    return teams.currentMemberships().find((m) => ('Team · ' + (m.teamName || 'Shared')) === folder) || null;
+  }
+  // Share an existing local host to a team (E2EE upload), keeping its folder. Used when a host is
+  // added directly in a team folder, so teammates get it automatically. Owner/Admin only.
+  async shareHostToTeam(hostId, teamId, secretOverride) {
+    const h = this.state.hosts.find((x) => x.id === hostId);
+    if (!h) return;
+    try {
+      // Prefer the caller's secret (avoids racing a just-written keychain entry); else read it back.
+      const secret = secretOverride || (await secretGet(hostId)) || {};
+      const meta = { schema: 1, name: h.name, host: h.addr, port: Number(h.port) || 22, user: h.user || 'root', auth: h.auth === 'key' ? 'key' : h.auth === 'agent' ? 'agent' : 'password' };
+      const sec = { schema: 1, password: secret.password ?? null, passphrase: secret.passphrase ?? null, keyText: secret.keyText ?? null };
+      const connId = await teams.createConnection(teamId, meta, sec);
+      this.setState((s) => ({ hosts: s.hosts.map((x) => (x.id === hostId ? { ...x, teamId, connId, connVersion: 1, tags: Array.from(new Set([...(x.tags || []), 'team'])) } : x)) }));
+      this.pushToast({ type: 'ok', title: 'Shared with team', msg: h.name });
+    } catch (e) {
+      this.pushToast({ type: 'err', title: 'Share failed', msg: String(e) });
+    }
+  }
+
   // ---- Auto-sync team connections into the vault (no manual import) ----
   // Pull every shared connection for the signed-in teams, decrypt locally, and upsert into the
   // host list keyed by the cloud connection id. A secret is only re-revealed when the connection
@@ -1831,8 +1854,12 @@ export default class App extends React.Component<any, any> {
   setView(v) { this.setState({ view: v, paletteOpen: false }); }
 
   openAddHost() {
+    // Prefill the folder when you're viewing a team folder, so a new host lands there and is
+    // auto-shared with that team.
+    const af = this.state.activeFolder;
+    const folder = (typeof af === 'string' && af.startsWith('Team · ')) ? af : '';
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: null,
-      form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] } });
+      form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder, jumpHost:'', snippet:'', tagInput:'', tags:[] } });
   }
   openEditHost(h) {
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: h.id,
@@ -1933,6 +1960,13 @@ export default class App extends React.Component<any, any> {
     this.setState(s => ({ hosts: [...s.hosts, host], addHostOpen: false, editingId: null, view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], newHostId: id }));
     if (secrets) secretSet(id, secrets);
     this.pushToast({ type:'ok', title:'Host added', msg: host.name + ' · ' + host.user + '@' + host.addr });
+    // Added directly into a team folder → auto-share it with that team (Owner/Admin only).
+    const mem = this._teamForFolder(base.folder);
+    if (mem && (mem.role === 'OWNER' || mem.role === 'ADMIN')) {
+      void this.shareHostToTeam(id, mem.teamId, secrets || {});
+    } else if (mem) {
+      this.pushToast({ type: 'info', title: 'Saved locally', msg: 'Only team admins can add shared connections to ' + (mem.teamName || 'this team') + '.' });
+    }
     setTimeout(() => this.setState(s => (s.newHostId === id ? { newHostId: null } : {})), 2200);
   }
   deleteHost(id) {
