@@ -1292,7 +1292,7 @@ export default class App extends React.Component<any, any> {
     catch (e) { this.pushToast({ type: 'err', title: 'Can’t view session', msg: (e && e.message) || 'Session unavailable' }); return; }
     const wsUrl = teams.relayWsUrl(t.relayUrl, t.ticket);
     const id = this.genId(), pid = this.genId();
-    const tab = { id, title: '👁 ' + (name || 'session'), host: name || 'session', user: '', addr: '', layout: 'row', sizes: [100], spectate: true, panes: [
+    const tab = { id, title: '◉ ' + (name || 'session'), host: name || 'session', user: '', addr: '', layout: 'row', sizes: [100], spectate: true, panes: [
       { id: pid, live: true, kind: 'spectate', sessionId: pid, wsUrl, watchName: name || 'session', teamId, watchSessionId: sessionId }
     ] };
     this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', presenceModal: null }));
@@ -1680,6 +1680,10 @@ export default class App extends React.Component<any, any> {
   // sign-in / linking and on demand.
   async syncAllTeams(force) {
     if (!teams.isSignedIn()) return;
+    // Prune hosts for teams you're no longer in (left / deleted / removed) — a fully-gone team
+    // never hits syncTeam's per-team prune below. Local (no teamId) hosts are kept.
+    const memberTeamIds = new Set(teams.currentMemberships().map((m) => m.teamId));
+    this.setState((s) => ({ hosts: s.hosts.filter((h) => !h.teamId || memberTeamIds.has(h.teamId)) }));
     let n = 0;
     for (const m of teams.currentMemberships()) {
       n += await this.syncTeam(m.teamId, m.teamName, force).catch(() => 0);
@@ -2717,14 +2721,17 @@ export default class App extends React.Component<any, any> {
                               ))}
                             </div>
                             )}
-                            <div style={css("display:flex;align-items:center;gap:6px;margin-top:2px;")}>
+                            {card.presence.length > 0 && (
+                              <Hov onClick={card.onPresence} title="See who’s online — and watch their session" s="display:flex;align-items:center;gap:8px;margin-top:3px;padding:7px 11px;background:rgba(70,217,160,.1);border:1px solid rgba(70,217,160,.28);border-radius:8px;cursor:pointer;" h="background:rgba(70,217,160,.18);border-color:rgba(70,217,160,.5);">
+                                <span className="aca-livedot"></span>
+                                <span style={css("font-size:11px;font-weight:600;color:#46d9a0;")}>{card.presence.length === 1 ? '1 teammate online' : card.presence.length + ' teammates online'}</span>
+                                <span style={css("flex:1;")}></span>
+                                <span style={css("font-size:10px;font-weight:600;color:#46d9a0;opacity:.85;")}>view →</span>
+                              </Hov>
+                            )}
+                            <div style={css("display:flex;align-items:center;gap:6px;margin-top:3px;")}>
                               <span style={css("font-size:10px;color:#54545e;")}>last used {card.lastUsed}</span>
                               <span style={css("flex:1;")}></span>
-                              {card.presence.length > 0 && (
-                                <Hov onClick={card.onPresence} title="See who’s online — and watch their session" s="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;letter-spacing:.02em;color:#46d9a0;background:rgba(70,217,160,.13);border:1px solid rgba(70,217,160,.3);border-radius:6px;padding:3px 9px;cursor:pointer;" h="background:rgba(70,217,160,.22);border-color:rgba(70,217,160,.55);">
-                                  <span className="aca-livedot"></span>{card.presence.length} online
-                                </Hov>
-                              )}
                               <span style={css("font-size:10.5px;color:#ff7a59;font-weight:600;")}>Connect →</span>
                             </div>
                           </Hov>
@@ -2777,7 +2784,7 @@ export default class App extends React.Component<any, any> {
                       <div onMouseDown={pane.onActivate} style={pane.boxStyle}>
                         <div style={pane.headStyle}>
                           <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:" + (pane.spectate ? "#a970ff" : pane.teamConn ? "#46d9a0" : "#ff7a59") + ";flex:none;")}></span>
-                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.spectate ? "👁 " + (pane.watchName || "viewing") : pane.hostLabel}</span>
+                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.spectate ? "◉ " + (pane.watchName || "viewing") : pane.hostLabel}</span>
                           {pane.teamConn && pane.teamMembers.length > 0 && (
                             <span title="Teammates live on this connection — click to watch" style={css("display:flex;align-items:center;gap:3px;margin-left:7px;")}>
                               {pane.teamMembers.slice(0, 5).map((mmb, mi) => (
@@ -3033,7 +3040,7 @@ export default class App extends React.Component<any, any> {
                       <div style={css("font-size:11px;color:#6a6a74;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{mmb.email || (mmb.kind === "native" ? "desktop app" : "web terminal")}</div>
                     </div>
                     {mmb.sessionId ? (
-                      <Hov as="button" onClick={() => this.openSpectate(this.state.presenceModal.teamId, mmb.sessionId, mmb.displayName)} s="flex:none;padding:7px 13px;background:rgba(70,217,160,.14);border:1px solid rgba(70,217,160,.4);border-radius:7px;color:#46d9a0;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;" h="background:rgba(70,217,160,.26);">👁 View</Hov>
+                      <Hov as="button" onClick={() => this.openSpectate(this.state.presenceModal.teamId, mmb.sessionId, mmb.displayName)} s="flex:none;padding:7px 13px;background:rgba(70,217,160,.14);border:1px solid rgba(70,217,160,.4);border-radius:7px;color:#46d9a0;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;" h="background:rgba(70,217,160,.26);">◉ View</Hov>
                     ) : (
                       <span title="This session isn’t shareable yet (they need to reconnect on a build with mirroring)" style={css("flex:none;font-size:10px;color:#54545e;")}>—</span>
                     )}

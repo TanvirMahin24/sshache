@@ -385,6 +385,16 @@ export async function changeMemberRole(teamId: string, memberId: string, role: s
 export async function removeMember(teamId: string, memberId: string): Promise<void> {
   await req('DELETE', `/v1/teams/${teamId}/members/${memberId}`);
 }
+// Leave a team yourself (any role). Refreshes memberships so the team + its synced connections drop.
+export async function leaveTeam(teamId: string): Promise<Membership[]> {
+  await req('POST', `/v1/teams/${teamId}/leave`);
+  return loadMemberships();
+}
+// Delete a whole team (owner only). Refreshes memberships.
+export async function deleteTeam(teamId: string): Promise<Membership[]> {
+  await req('DELETE', `/v1/teams/${teamId}`);
+  return loadMemberships();
+}
 
 // Invite by email → returns the shareable code.
 export async function inviteMember(teamId: string, email: string, role: string): Promise<string> {
