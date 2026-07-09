@@ -465,9 +465,57 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       };
     }
 
+    // ── Spectate (read-only): watch a teammate's session streamed from the relay. No SSH, no
+    // input — inbound frames write straight to xterm. ──
+    if (session.kind === "spectate") {
+      term.writeln(`\x1b[90m→ connecting to ${session.watchName || "session"}…\x1b[0m`);
+      let sws: WebSocket | null = null;
+      try {
+        sws = new WebSocket(session.wsUrl);
+        sws.onmessage = (ev: any) => {
+          let msg: any; try { msg = JSON.parse(ev.data); } catch (_) { return; }
+          if (msg.type === "ready") { term.clear(); term.writeln(`\x1b[92m● watching ${session.watchName || ""} — read-only\x1b[0m\r\n`); if (onConnected) onConnected(); }
+          else if (msg.type === "data" && typeof msg.data === "string") term.write(msg.data);
+          else if (msg.type === "error") term.writeln(`\r\n\x1b[31m${msg.message || "relay error"}\x1b[0m`);
+        };
+        sws.onclose = () => { term.writeln(`\r\n\x1b[90m— session ended —\x1b[0m`); if (onClosed) onClosed(); };
+        sws.onerror = () => { if (onError) onError("relay connection failed"); };
+      } catch (e) {
+        term.writeln(`\r\n\x1b[31mcould not connect: ${String(e)}\x1b[0m`); if (onError) onError(String(e));
+      }
+      const spySub = term.onData(() => {}); // read-only spectator — keystrokes go nowhere
+      return () => {
+        disposed = true;
+        if (register) register(session.sessionId, null);
+        spySub.dispose();
+        if (sws) { try { sws.close(); } catch (_) {} }
+        term.dispose();
+      };
+    }
+
+    // Team connection → mirror our terminal OUTPUT to the relay so teammates can spectate it.
+    // SSH stays local; only output leaves (never the secret or keystrokes). Best-effort: a mirror
+    // failure never affects the local session.
+    const mirror: { ws: WebSocket | null; enc: TextDecoder; tee: (u: Uint8Array) => void } = {
+      ws: null,
+      enc: new TextDecoder(),
+      tee(u) { const w = this.ws; if (w && w.readyState === 1) { try { w.send(JSON.stringify({ type: "data", data: this.enc.decode(u, { stream: true }) })); } catch (_) {} } },
+    };
+    const startMirror = async () => {
+      if (!h.teamId || !h.connId || !teams.isSignedIn()) return;
+      const t = await teams.requestMirror(h.teamId, h.connId);
+      if (!t || disposed) return;
+      try {
+        const w = new WebSocket(teams.relayWsUrl(t.relayUrl, t.ticket));
+        w.onopen = () => { try { w.send(JSON.stringify({ type: "init", cols: term.cols, rows: term.rows })); } catch (_) {} };
+        w.onerror = () => {};
+        mirror.ws = w;
+      } catch (_) {}
+    };
+
     term.writeln(`\x1b[90m→ connecting ${h.user || ""}@${h.addr}:${h.port || 22}…\x1b[0m`);
     const onData = new Channel<number[]>();
-    onData.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); };
+    onData.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); mirror.tee(u); };
     const onClose = new Channel<string>();
     onClose.onmessage = () => { term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m"); if (onClosed) onClosed(); };
 
@@ -490,6 +538,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
         if (disposed) return;
         // On-connect snippet: run the host's saved command once the shell is up.
         if (h.snippet && h.snippet.trim()) invoke("ssh_write", { sessionId: session.sessionId, data: h.snippet.trim() + "\n" }).catch(() => {});
+        void startMirror(); // if this is a team connection, start mirroring output for spectators
         if (onConnected) onConnected();
       })
       .catch((e) => {
@@ -525,6 +574,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       if (register) register(session.sessionId, null);
       ro.disconnect();
       dataSub.dispose();
+      if (mirror.ws) { try { mirror.ws.close(); } catch (_) {} }
       invoke("ssh_disconnect", { sessionId: session.sessionId }).catch(() => {});
       term.dispose();
     };
@@ -663,7 +713,8 @@ export default class App extends React.Component<any, any> {
     update: null,        // null | { version, url, asset }
     updateChecking: false,
     view: 'dashboard',
-    teamPresence: {}, // connId -> [{ userId, displayName, kind }] of teammates active on it (not you)
+    teamPresence: {}, // connId -> [{ userId, displayName, email, kind, sessionId }] of teammates active on it (not you)
+    presenceModal: null, // { host, presence } — the "who's online" modal for a team connection card
     broadcast: false,
     search: '',
     activeFolder: 'all',
@@ -1227,6 +1278,19 @@ export default class App extends React.Component<any, any> {
       { id: pid, live: true, kind: 'ssh', sessionId: pid, host, secret, keyText: keyText || '', jump: jump || null, user: host.user, hostName: host.name, cwd: '~' }
     ] };
     this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', paletteOpen: false, ...(silent ? {} : { connecting: { host, secret, keyText: keyText || '', jump: jump || null, tabId: id, failed: false, step: 0 } }) }));
+  }
+  // Open a read-only "view mode" tab that watches a teammate's live session through the relay.
+  async openSpectate(teamId, sessionId, name) {
+    if (!teamId || !sessionId) return;
+    let t;
+    try { t = await teams.requestShadow(teamId, sessionId); }
+    catch (e) { this.pushToast({ type: 'err', title: 'Can’t view session', msg: (e && e.message) || 'Session unavailable' }); return; }
+    const wsUrl = teams.relayWsUrl(t.relayUrl, t.ticket);
+    const id = this.genId(), pid = this.genId();
+    const tab = { id, title: '👁 ' + (name || 'session'), host: name || 'session', user: '', addr: '', layout: 'row', sizes: [100], spectate: true, panes: [
+      { id: pid, live: true, kind: 'spectate', sessionId: pid, wsUrl, watchName: name || 'session', teamId, watchSessionId: sessionId }
+    ] };
+    this.setState(s => ({ tabs: [...s.tabs, tab], activeTabId: id, activePaneId: pid, view: 'workspace', presenceModal: null }));
   }
   // Flip a pane's live-connection flag (drives the orange dot on the tab).
   setPaneConnected(tabId, paneId, val) {
@@ -1923,6 +1987,11 @@ export default class App extends React.Component<any, any> {
         promptUser: p.user + '@' + p.host,
         promptColor: theme.accent,
         live: !!p.live, kind: p.kind || 'ssh', sessionId: p.sessionId, hostObj: p.live ? p.host : null, secret: p.secret, keyText: p.keyText, jump: p.jump || null,
+        wsUrl: p.wsUrl, watchName: p.watchName,
+        // Team-connection markers + who else is live on it right now (for the in-pane members bar).
+        teamConn: !!(p.host && p.host.teamId && p.host.connId), spectate: p.kind === 'spectate',
+        teamMembers: (p.host && p.host.teamId && p.host.connId) ? ((s.teamPresence || {})[p.host.connId] || []) : [],
+        onWatch: (entry) => { if (p.host && entry.sessionId) this.openSpectate(p.host.teamId, entry.sessionId, entry.displayName); },
         termTheme: { bg: theme.bg, fg: theme.fg, accent: theme.accent, ansi: theme.ansi }, fontSize: s.settings.fontSize,
         cursor: s.settings.cursor, scrollback: parseInt(s.settings.scrollback, 10) || 1000,
         onConnected: () => this.handlePaneConnected(tab, p.id), onError: (msg) => this.handlePaneError(tab, p.id, msg),
@@ -1959,11 +2028,16 @@ export default class App extends React.Component<any, any> {
 
     const tabs = s.tabs.map(t => {
       const sel = t.id === s.activeTabId;                                 // selected tab → outline + shadow
-      const conn = t.panes.some(p => p.live && p.connected);             // any live pane connected → orange dot
+      const conn = t.panes.some(p => p.live && p.connected);             // any live pane connected → dot lit
+      const isSpectate = !!t.spectate;                                    // view-mode tab (watching a teammate)
+      const isTeam = !isSpectate && t.panes.some(p => p.host && p.host.teamId); // team connection tab
+      const ac = isSpectate ? '168,112,255' : isTeam ? '70,217,160' : '255,122,89'; // purple / green / orange
+      const acHex = isSpectate ? '#a970ff' : isTeam ? '#46d9a0' : '#ff7a59';
+      const themed = isTeam || isSpectate;
       return {
       id: t.id, title: t.title, active: sel,
-      style: { display:'flex', alignItems:'center', gap:'8px', padding:'0 8px 0 11px', height:'30px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: sel ? '#ededf0' : '#8b8b95', background: sel ? '#15151b' : 'transparent', border:'1px solid ' + (sel ? 'rgba(255,122,89,.45)' : 'transparent'), boxShadow: sel ? '0 0 0 1px rgba(255,122,89,.12), 0 2px 9px rgba(0,0,0,.4)' : 'none', maxWidth:'170px', flex:'none' },
-      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: conn ? '#ff7a59' : '#3a3a44', flex:'none' },
+      style: { display:'flex', alignItems:'center', gap:'8px', padding:'0 8px 0 11px', height:'30px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: sel ? '#ededf0' : '#8b8b95', background: sel ? '#15151b' : (themed ? 'rgba(' + ac + ',.06)' : 'transparent'), border:'1px solid ' + (sel ? 'rgba(' + ac + ',.5)' : (themed ? 'rgba(' + ac + ',.28)' : 'transparent')), boxShadow: sel ? '0 0 0 1px rgba(' + ac + ',.14), 0 2px 9px rgba(0,0,0,.4)' : 'none', maxWidth:'175px', flex:'none' },
+      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: isSpectate ? acHex : (conn ? (isTeam ? acHex : '#ff7a59') : '#3a3a44'), flex:'none', boxShadow: (isSpectate || (conn && isTeam)) ? '0 0 6px rgba(' + ac + ',.6)' : 'none' },
       onSelect: () => this.setState({ activeTabId: t.id, activePaneId: t.panes[0].id }),
       onClose: (e) => { e.stopPropagation(); this.closeTab(t.id); }
     };});
@@ -2146,6 +2220,7 @@ export default class App extends React.Component<any, any> {
         id: h.id, name: h.name, target: h.user + '@' + h.addr, port: h.port, folder: h.folder, lastUsed: h.lastUsed,
         authIcon: authIconOf(h.auth), authLabel: authLabelOf(h.auth), isTeam,
         presence: (this.state.teamPresence || {})[h.connId] || [],
+        onPresence: (e) => { e.stopPropagation(); this.setState({ presenceModal: { teamId: h.teamId, name: h.name, presence: (this.state.teamPresence || {})[h.connId] || [] } }); },
         tags: h.tags.map(t => ({ name: t })),
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
         cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.5)' : '#1c1c24'), boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none', borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
@@ -2619,12 +2694,6 @@ export default class App extends React.Component<any, any> {
                               <span style={card.dotStyle}></span>
                               <span style={css("flex:1;min-width:0;font-size:14px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
                               {card.isTeam && (<span title="Shared by your team" style={css("font-size:8.5px;letter-spacing:.08em;color:#46d9a0;background:rgba(70,217,160,.14);border-radius:4px;padding:2px 6px;flex:none;")}>TEAM</span>)}
-                              {card.presence.length > 0 && (
-                                <span title={card.presence.map((p) => p.displayName).join(', ') + ' · on this connection now'} style={css("display:inline-flex;align-items:center;gap:5px;font-size:9px;letter-spacing:.05em;color:#2ecc71;background:rgba(46,204,113,.14);border-radius:4px;padding:2px 7px;flex:none;")}>
-                                  <span className="aca-livedot"></span>
-                                  {card.presence.length === 1 ? card.presence[0].displayName : card.presence.length + ' live'}
-                                </span>
-                              )}
                               {card.favorite && (<span title="Favorite" style={css("font-size:12px;color:#ffcf5c;flex:none;")}>★</span>)}
                               <span style={css("font-size:10px;color:#6a6a74;border:1px solid #20202a;border-radius:5px;padding:2px 6px;flex:none;")}>{card.authIcon} {card.authLabel}</span>
                             </div>
@@ -2646,6 +2715,11 @@ export default class App extends React.Component<any, any> {
                             <div style={css("display:flex;align-items:center;gap:6px;margin-top:2px;")}>
                               <span style={css("font-size:10px;color:#54545e;")}>last used {card.lastUsed}</span>
                               <span style={css("flex:1;")}></span>
+                              {card.presence.length > 0 && (
+                                <Hov onClick={card.onPresence} title="See who’s online — and watch their session" s="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;letter-spacing:.02em;color:#46d9a0;background:rgba(70,217,160,.13);border:1px solid rgba(70,217,160,.3);border-radius:6px;padding:3px 9px;cursor:pointer;" h="background:rgba(70,217,160,.22);border-color:rgba(70,217,160,.55);">
+                                  <span className="aca-livedot"></span>{card.presence.length} online
+                                </Hov>
+                              )}
                               <span style={css("font-size:10.5px;color:#ff7a59;font-weight:600;")}>Connect →</span>
                             </div>
                           </Hov>
@@ -2697,14 +2771,21 @@ export default class App extends React.Component<any, any> {
                       {pane.notFirst && (<div className="aca-resizer" onMouseDown={pane.onGutterDown} style={pane.resizerStyle}><span className="aca-rzbar" style={pane.resizerBar}></span></div>)}
                       <div onMouseDown={pane.onActivate} style={pane.boxStyle}>
                         <div style={pane.headStyle}>
-                          <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:#ff7a59;flex:none;")}></span>
-                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.hostLabel}</span>
+                          <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:" + (pane.spectate ? "#a970ff" : pane.teamConn ? "#46d9a0" : "#ff7a59") + ";flex:none;")}></span>
+                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.spectate ? "👁 " + (pane.watchName || "viewing") : pane.hostLabel}</span>
+                          {pane.teamConn && pane.teamMembers.length > 0 && (
+                            <span title="Teammates live on this connection — click to watch" style={css("display:flex;align-items:center;gap:3px;margin-left:7px;")}>
+                              {pane.teamMembers.slice(0, 5).map((mmb, mi) => (
+                                <Hov key={mi} onClick={() => pane.onWatch(mmb)} title={mmb.sessionId ? ("Watch " + mmb.displayName + "’s session (opens a new tab)") : (mmb.displayName + " — session not shareable yet")} s={{ width: "20px", height: "20px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "8.5px", fontWeight: 700, cursor: mmb.sessionId ? "pointer" : "default", background: mmb.sessionId ? "rgba(70,217,160,.16)" : "#16161c", color: mmb.sessionId ? "#46d9a0" : "#6a6a74", border: "1px solid " + (mmb.sessionId ? "rgba(70,217,160,.4)" : "#26262e") }} h={mmb.sessionId ? "background:rgba(70,217,160,.28);transform:translateY(-1px);" : ""}>{(mmb.displayName || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}</Hov>
+                              ))}
+                            </span>
+                          )}
                           <span style={css("flex:1;")}></span>
                           <span style={css("font-size:10px;color:#54545e;letter-spacing:.05em;")}>{pane.cwd}</span>
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
                         {pane.live ? (
-                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} />
+                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind, wsUrl: pane.wsUrl, watchName: pane.watchName }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} />
                         ) : (
                         <div style={pane.termStyle}>
                           {pane.lines.map((line, li) => (
@@ -2920,6 +3001,39 @@ export default class App extends React.Component<any, any> {
                 <Hov as="button" onClick={() => v.openExt(v.author.tip)} s="margin-top:11px;width:100%;padding:11px;background:linear-gradient(135deg,#ff7a59,#ff4f7a);border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;" h="filter:brightness(1.06);">☕&nbsp;Buy me a coffee</Hov>
                 <Hov as="button" onClick={v.openWhatsNew} s="margin-top:12px;background:none;border:none;color:#7a7a85;font:inherit;font-size:11px;text-decoration:underline;cursor:pointer;" h="color:#ededf0;">What's new in SSH&nbsp;Ache</Hov>
                 <div style={css("font-size:10px;color:#54545e;margin-top:10px;")}>SSH&nbsp;Ache · v{v.appVersion}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* WHO'S ONLINE (team connection) — view any active teammate's session */}
+        {this.state.presenceModal && (
+          <div onClick={() => this.setState({ presenceModal: null })} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:67;animation:acaFade .12s ease;")}>
+            <div onClick={(e) => e.stopPropagation()} style={css("width:400px;max-width:96%;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:9px;padding:16px 20px;border-bottom:1px solid #18181f;")}>
+                <span className="aca-livedot"></span>
+                <span style={css("font-size:13px;font-weight:700;color:#f2f2f5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>Online · {this.state.presenceModal.name}</span>
+                <span style={css("flex:1;")}></span>
+                <Hov onClick={() => this.setState({ presenceModal: null })} s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border:1px solid #26262e;border-radius:6px;cursor:pointer;" h="background:#16161c;color:#ededf0;">×</Hov>
+              </div>
+              <div style={css("padding:10px;display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto;")}>
+                {this.state.presenceModal.presence.length === 0 && (
+                  <div style={css("padding:22px;text-align:center;color:#6a6a74;font-size:12px;")}>No one else is on this connection right now.</div>
+                )}
+                {this.state.presenceModal.presence.map((mmb, mi) => (
+                  <div key={mi} style={css("display:flex;align-items:center;gap:11px;padding:10px 12px;background:#0e0e13;border:1px solid #1c1c24;border-radius:10px;")}>
+                    <span style={css("width:32px;height:32px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#46d9a0;background:rgba(70,217,160,.14);border:1px solid rgba(70,217,160,.3);")}>{(mmb.displayName || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}</span>
+                    <div style={css("flex:1;min-width:0;")}>
+                      <div style={css("font-size:13px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{mmb.displayName}</div>
+                      <div style={css("font-size:11px;color:#6a6a74;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{mmb.email || (mmb.kind === "native" ? "desktop app" : "web terminal")}</div>
+                    </div>
+                    {mmb.sessionId ? (
+                      <Hov as="button" onClick={() => this.openSpectate(this.state.presenceModal.teamId, mmb.sessionId, mmb.displayName)} s="flex:none;padding:7px 13px;background:rgba(70,217,160,.14);border:1px solid rgba(70,217,160,.4);border-radius:7px;color:#46d9a0;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;" h="background:rgba(70,217,160,.26);">👁 View</Hov>
+                    ) : (
+                      <span title="This session isn’t shareable yet (they need to reconnect on a build with mirroring)" style={css("flex:none;font-size:10px;color:#54545e;")}>—</span>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
