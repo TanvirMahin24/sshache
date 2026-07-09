@@ -222,6 +222,11 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.0', items: [
+    'Live view mode: on a team connection you can see who’s online and watch a teammate’s session in real time — read-only, in its own tab. Your SSH stays on your machine; only the on-screen output is shared.',
+    'Redesigned team presence: an “N online” pill on each shared connection opens a list of active teammates (name + email) with one-click “View session”, and an avatar bar inside an open connection lets you jump straight into anyone’s session.',
+    'Team-connection tabs are tinted green and view-mode tabs purple, so it’s always clear what you’re looking at.',
+  ] },
   { version: '0.6.0', items: [
     'Teams, in the app: create teams, invite members (with a shareable code), manage members and roles, share keys, and accept invitations — no need to go to the website.',
     'Team connections sync into your Connections list automatically (no manual import), and a green badge shows which teammates are on a connection right now.',
