@@ -222,6 +222,10 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.2', items: [
+    'Create a connection inside a team folder and it’s automatically shared with the team — no separate step.',
+    'Shared team connections: only owners and admins can add, edit, or delete them; members use them.',
+  ] },
   { version: '0.7.1', items: [
     'Teams: leave a team, or delete a team you own, right from the Teams tab.',
     'Team connection cards now show online teammates on their own row, and “view session” uses a cleaner marker.',
