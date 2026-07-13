@@ -14,9 +14,9 @@ export interface ImportArgs {
 
 interface Props {
   isTauri: boolean;
-  defaults: { apiUrl: string; email: string };
+  defaults: { email: string };
   onImport: (args: ImportArgs) => void;
-  onRemember: (apiUrl: string, email: string) => void;
+  onRemember: (email: string) => void;
   onSync: (force?: boolean) => Promise<number | undefined>;
   onGoDashboard: () => void;
 }
@@ -60,7 +60,6 @@ function timeAgo(iso: string): string {
 }
 
 export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGoDashboard }: Props): React.ReactElement {
-  const [apiUrl, setApiUrl] = useState(defaults.apiUrl || 'https://platform.sshache.com');
   const [email, setEmail] = useState(defaults.email || '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -134,8 +133,8 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
     setLinkErr('');
     if (pollRef.current) clearInterval(pollRef.current);
     try {
-      const { linkId, code, approveUrl } = await teams.startLink(apiUrl.trim());
-      onRemember(apiUrl.trim(), email.trim());
+      const { linkId, code, approveUrl } = await teams.startLink();
+      onRemember(email.trim());
       setLinking({ code, linkId });
       if (isTauri) void invoke('open_url', { url: approveUrl }).catch(() => {});
       else window.open(approveUrl, '_blank', 'noopener');
@@ -181,8 +180,8 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
     setErr('');
     setBusy(true);
     try {
-      const { memberships: ms } = await teams.signIn(apiUrl.trim(), email.trim(), password);
-      onRemember(apiUrl.trim(), email.trim());
+      const { memberships: ms } = await teams.signIn(email.trim(), password);
+      onRemember(email.trim());
       setPassword('');
       setSignedIn(true);
       setMemberships(ms);
@@ -385,16 +384,12 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
           </div>
         ) : (
           <div style={box}>
-            <label style={{ ...label, marginTop: 0 }}>
-              Server URL
-              <input style={input} value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://platform.sshache.com" />
-            </label>
-            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '10px 0 0' }}>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
               We'll open the web app in your browser to sign in or create an account — no password typed here.
             </p>
             {linkErr && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13, marginBottom: 0 }}>{linkErr}</p>}
             <div style={{ marginTop: 16 }}>
-              <button style={btn(true)} onClick={() => void startLinkFlow()} disabled={!apiUrl.trim()}>
+              <button style={btn(true)} onClick={() => void startLinkFlow()}>
                 Connect via browser
               </button>
             </div>

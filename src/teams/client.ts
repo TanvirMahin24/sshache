@@ -53,7 +53,8 @@ interface Vault {
   identity: C.Identity;
 }
 
-let base = '';
+// The SaaS origin is hard-wired — the desktop app only ever talks to the official backend.
+let base = 'https://sshache.com';
 let accessToken = '';
 let refreshToken = '';
 let vault: Vault | null = null;
@@ -135,11 +136,9 @@ async function req(method: string, path: string, body?: unknown): Promise<any> {
 // ---- Sign in + unlock ----------------------------------------------------
 
 export async function signIn(
-  apiUrl: string,
   email: string,
   password: string,
 ): Promise<{ user: { id: string; email: string; displayName: string }; memberships: Membership[] }> {
-  base = apiUrl.replace(/\/+$/, '');
   const login = await raw(
     'POST',
     '/v1/auth/login',
@@ -236,10 +235,7 @@ export function relayWsUrl(relayUrl: string, ticket: string): string {
 // seals the identity + a fresh desktop session to linkEph.publicKey. We poll for it and unseal
 // locally — the server only ever relays ciphertext it can't read.
 
-export async function startLink(
-  apiUrl: string,
-): Promise<{ linkId: string; code: string; approveUrl: string }> {
-  base = apiUrl.replace(/\/+$/, '');
+export async function startLink(): Promise<{ linkId: string; code: string; approveUrl: string }> {
   linkEph = C.newEphemeralKeypair();
   const r = await raw('POST', '/v1/device-link/start', { desktopPubKey: C.b64(linkEph.publicKey) }, false);
   if (!r.ok || !r.data?.linkId) {
