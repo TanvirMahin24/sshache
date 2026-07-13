@@ -222,6 +222,9 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.4', items: [
+    'The app now connects to the official SSH Ache backend automatically — the Server URL field is gone. Existing sign-ins keep working.',
+  ] },
   { version: '0.7.3', items: [
     'Key Vault: save an SSH private key once under a name, then reuse it across connections. Open it from the command palette (Key Vault) to add, reveal, or delete saved keys.',
     'Creating or editing a connection, you can now pick a saved key or save a new one to the vault — no more re-pasting the same key.',
