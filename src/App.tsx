@@ -222,6 +222,11 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.3', items: [
+    'Key Vault: save an SSH private key once under a name, then reuse it across connections. Open it from the command palette (Key Vault) to add, reveal, or delete saved keys.',
+    'Creating or editing a connection, you can now pick a saved key or save a new one to the vault — no more re-pasting the same key.',
+    'Fixed: a connection’s key wasn’t viewable after it was created; editing now loads the saved key from your OS keychain.',
+  ] },
   { version: '0.7.2', items: [
     'Create a connection inside a team folder and it’s automatically shared with the team — no separate step.',
     'Shared team connections: only owners and admins can add, edit, or delete them; members use them.',
