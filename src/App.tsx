@@ -630,6 +630,53 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
   );
 }
 
+// Key Vault: manage named, reusable private keys. Key text is stored in the OS keychain (never
+// in plaintext state, never uploaded); this modal only shows metadata + reveal-on-demand.
+function KeyVaultModal({ keys, onAdd, onDelete, onReveal, onClose }: any) {
+  const [name, setName] = React.useState("");
+  const [keyText, setKeyText] = React.useState("");
+  const [passphrase, setPassphrase] = React.useState("");
+  const [revealed, setRevealed] = React.useState<any>({});
+  const inp: any = { width: "100%", boxSizing: "border-box", background: "#0e0e12", border: "1px solid #20202a", borderRadius: 8, padding: "10px 12px", color: "#ededf0", font: "inherit", fontSize: 13, outline: "none" };
+  const add = () => { const id = onAdd(name, keyText, passphrase); if (id) { setName(""); setKeyText(""); setPassphrase(""); } };
+  const reveal = async (id: string) => { const s = await onReveal(id); setRevealed((r: any) => ({ ...r, [id]: s.keyText })); };
+  return (
+    <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(5,5,7,.6)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 40, zIndex: 70 }}>
+      <div onClick={(e: any) => e.stopPropagation()} style={{ width: 560, maxWidth: "96%", maxHeight: "88vh", display: "flex", flexDirection: "column", background: "#0c0c10", border: "1px solid #26262e", borderRadius: 14, boxShadow: "0 36px 90px rgba(0,0,0,.65)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "15px 19px", borderBottom: "1px solid #18181f" }}>
+          <span style={{ color: "#46d9a0" }}>🔑</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#f2f2f5" }}>Key Vault</span>
+          <span style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", color: "#8b8b95", border: "1px solid #26262e", borderRadius: 6, cursor: "pointer", background: "transparent" }}>×</button>
+        </div>
+        <div style={{ padding: 16, overflow: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 11, color: "#6a6a74" }}>Reusable private keys — stored encrypted in your OS keychain, never uploaded. Pick one when adding a connection.</div>
+          {keys.length === 0 ? (
+            <div style={{ padding: 18, textAlign: "center", color: "#6a6a74", fontSize: 12.5, border: "1px dashed #26262e", borderRadius: 10 }}>No saved keys yet — add one below.</div>
+          ) : keys.map((k: any) => (
+            <div key={k.id} style={{ padding: "11px 13px", background: "#0e0e13", border: "1px solid #1c1c24", borderRadius: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#ededf0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.name}</span>
+                <span style={{ fontSize: 10, color: "#6a6a74", border: "1px solid #20202a", borderRadius: 5, padding: "2px 6px", flex: "none" }}>{k.label}</span>
+                <button onClick={() => void reveal(k.id)} style={{ background: "#101015", border: "1px solid #20202a", borderRadius: 6, color: "#9a9aa3", font: "inherit", fontSize: 11, padding: "5px 9px", cursor: "pointer" }}>Reveal</button>
+                <button onClick={() => onDelete(k.id)} style={{ background: "#101015", border: "1px solid #20202a", borderRadius: 6, color: "#ff6b78", font: "inherit", fontSize: 11, padding: "5px 9px", cursor: "pointer" }}>Delete</button>
+              </div>
+              {revealed[k.id] && <pre style={{ margin: "8px 0 0", padding: 10, background: "#08080b", border: "1px solid #1c1c24", borderRadius: 8, color: "#9a9aa3", fontSize: 10.5, whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 140, overflow: "auto" }}>{revealed[k.id]}</pre>}
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid #18181f", marginTop: 4, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", color: "#6a6a74" }}>Add a key</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. work-laptop)" style={inp} />
+            <textarea value={keyText} onChange={(e) => setKeyText(e.target.value)} placeholder="Paste private key (PEM / OpenSSH)…" rows={4} spellCheck={false} style={{ ...inp, minHeight: 90, resize: "vertical", fontSize: 11.5, lineHeight: 1.5 }} />
+            <input value={passphrase} onChange={(e) => setPassphrase(e.target.value)} type="password" placeholder="Passphrase (optional)" style={inp} />
+            <button onClick={add} disabled={!name.trim() || !keyText.trim()} style={{ alignSelf: "flex-start", background: "#ff7a59", border: "none", borderRadius: 8, color: "#0c0b0a", font: "inherit", fontSize: 12.5, fontWeight: 700, padding: "9px 18px", cursor: "pointer", opacity: (!name.trim() || !keyText.trim()) ? 0.5 : 1 }}>Save key</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default class App extends React.Component<any, any> {
   paneWrap = React.createRef();
   paletteRef = React.createRef();
@@ -738,7 +785,9 @@ export default class App extends React.Component<any, any> {
     editingId: null,
     newHostId: null,
     hosts: [],
-    form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
+    vaultKeys: [], // [{ id, name, label, createdAt }] — private key text lives in the keychain (key:<id>)
+    keysOpen: false, // Key Vault modal
+    form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', vaultKeyId:'', saveKeyName:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
     settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsApiUrl:'', teamsEmail:'' },
     activeTabId: 't1',
     activePaneId: 'p1',
@@ -1037,11 +1086,11 @@ export default class App extends React.Component<any, any> {
       this.paletteRef.current.focus();
     }
     const openHosts = (st) => Array.from(new Set(st.tabs.flatMap(t => t.panes.filter(p => p.live).map(p => p.host && p.host.id)).filter(Boolean)));
-    const keys = ['hosts', 'settings', 'themeId', 'sidebarOpen', 'folderMeta', 'tourSeen'];
+    const keys = ['hosts', 'vaultKeys', 'settings', 'themeId', 'sidebarOpen', 'folderMeta', 'tourSeen'];
     const cur = openHosts(this.state);
     if (keys.some(k => this.state[k] !== prevState[k]) || JSON.stringify(cur) !== JSON.stringify(openHosts(prevState))) {
       saveCfg('state', JSON.stringify({
-        hosts: this.state.hosts, settings: this.state.settings,
+        hosts: this.state.hosts, vaultKeys: this.state.vaultKeys, settings: this.state.settings,
         themeId: this.state.themeId, sidebarOpen: this.state.sidebarOpen,
         folderMeta: this.state.folderMeta, tourSeen: this.state.tourSeen, openHosts: cur,
       }));
@@ -1865,11 +1914,55 @@ export default class App extends React.Component<any, any> {
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: null,
       form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', folder, jumpHost:'', snippet:'', tagInput:'', tags:[] } });
   }
-  openEditHost(h) {
+  async openEditHost(h) {
+    // Load the secret back from the keychain so the key/password IS viewable & editable (they
+    // aren't stored on the host object). vaultKeyId shows which saved key it uses, if any.
+    const saved = (await secretGet(h.id)) || {};
     this.setState({ addHostOpen: true, settingsOpen: false, paletteOpen: false, editingId: h.id,
-      form: { name:h.name, host:h.addr, port:h.port, user:h.user, auth:h.auth, password:'',
-        keyMode: h.keyMode || 'file', keyPath: h.keyPath || '', keyText: h.keyText || '', passphrase:'',
+      form: { name:h.name, host:h.addr, port:h.port, user:h.user, auth:h.auth, password: saved.password || '',
+        keyMode: h.keyMode || 'file', keyPath: h.keyPath || '', keyText: saved.keyText || '', passphrase: saved.passphrase || '',
+        vaultKeyId: h.vaultKeyId || '',
         folder:h.folder, jumpHost: h.jumpHost || '', snippet: h.snippet || '', tagInput:'', tags:[...h.tags] } });
+  }
+
+  // ---- Key Vault: named private keys, reusable across connections. Metadata in state.vaultKeys;
+  // the key text + passphrase live in the OS keychain under 'key:<id>' (never plaintext in state). ----
+  _keyLabel(keyText) {
+    const t = (keyText || '').slice(0, 90);
+    if (/BEGIN OPENSSH/.test(t)) return 'OpenSSH';
+    if (/BEGIN RSA/.test(t)) return 'RSA';
+    if (/BEGIN EC/.test(t)) return 'ECDSA';
+    if (/BEGIN DSA/.test(t)) return 'DSA';
+    if (/PuTTY-User-Key/.test(t)) return 'PuTTY';
+    if (/BEGIN[\s\S]*PRIVATE KEY/.test(t)) return 'PEM';
+    return 'Key';
+  }
+  addVaultKey(name, keyText, passphrase) {
+    const nm = (name || '').trim();
+    const kt = (keyText || '').trim();
+    if (!nm || !kt) { this.pushToast({ type:'err', title:'Missing fields', msg:'A name and a private key are required' }); return null; }
+    const v = this.validateKey(kt);
+    if (v.state === 'error') { this.pushToast({ type:'err', title:'Invalid key', msg: v.message }); return null; }
+    const id = 'vk' + this.genId();
+    secretSet('key:' + id, { keyText: kt, passphrase: passphrase || '' });
+    this.setState((s) => ({ vaultKeys: [...s.vaultKeys, { id, name: nm, label: this._keyLabel(kt), createdAt: Date.now() }] }));
+    this.pushToast({ type:'ok', title:'Key saved', msg: nm });
+    return id;
+  }
+  deleteVaultKey(id) {
+    const k = this.state.vaultKeys.find((x) => x.id === id);
+    if (!window.confirm('Delete the saved key "' + (k ? k.name : '') + '"? Connections already using it keep their own copy.')) return;
+    secretSet('key:' + id, {}); // clear the keychain slot
+    this.setState((s) => ({ vaultKeys: s.vaultKeys.filter((x) => x.id !== id) }));
+  }
+  async revealVaultKey(id) {
+    const s = (await secretGet('key:' + id)) || {};
+    return { keyText: s.keyText || '', passphrase: s.passphrase || '' };
+  }
+  // Load a saved key's text into the add-host form (used by the "Saved key" picker).
+  async pickVaultKey(id) {
+    const s = await this.revealVaultKey(id);
+    this.setState((st) => ({ form: { ...st.form, vaultKeyId: id, keyText: s.keyText, passphrase: s.passphrase } }));
   }
   // Build an `ssh` command line for use in another terminal / tool.
   sshCommand(h) {
@@ -1931,7 +2024,7 @@ export default class App extends React.Component<any, any> {
     const s: any = {};
     if (f.auth === 'password' && f.password) s.password = f.password;
     if (f.auth === 'key' && f.passphrase) s.passphrase = f.passphrase;
-    if (f.auth === 'key' && f.keyMode === 'text' && f.keyText.trim()) s.keyText = f.keyText;
+    if (f.auth === 'key' && (f.keyMode === 'text' || f.keyMode === 'vault') && f.keyText.trim()) s.keyText = f.keyText;
     return Object.keys(s).length ? s : null;
   }
   saveHost() {
@@ -1948,9 +2041,14 @@ export default class App extends React.Component<any, any> {
     const base = {
       name: f.name.trim(), user: (f.user.trim() || 'root'), addr: f.host.trim(),
       port: (f.port.trim() || '22'), folder: (f.folder.trim() || 'Uncategorized'),
-      tags: f.tags, auth: f.auth, keyMode: f.keyMode, keyPath: f.keyPath, jumpHost: f.jumpHost || '', snippet: f.snippet || ''
+      tags: f.tags, auth: f.auth, keyMode: f.keyMode, keyPath: f.keyPath, vaultKeyId: f.vaultKeyId || '', jumpHost: f.jumpHost || '', snippet: f.snippet || ''
     };
     const secrets = this._formSecrets(f);
+    // "Save this key to the Key Vault" (paste mode) → create a named key + link the connection to it.
+    if (f.auth === 'key' && f.keyMode === 'text' && (f.saveKeyName || '').trim() && f.keyText.trim()) {
+      const vkId = this.addVaultKey(f.saveKeyName, f.keyText, f.passphrase);
+      if (vkId) base.vaultKeyId = vkId;
+    }
     if (this.state.editingId) {
       const id = this.state.editingId;
       this.setState(s => ({ hosts: s.hosts.map(h => h.id === id ? { ...h, ...base } : h), addHostOpen: false, editingId: null, newHostId: id }));
@@ -2107,6 +2205,7 @@ export default class App extends React.Component<any, any> {
     // command palette
     const baseItems = [
       { name:'Add host', hint:'⌘N', icon:'+', color:'#ff7a59', run: () => this.openAddHost() },
+      { name:'Key Vault', hint:'', icon:'🔑', color:'#46d9a0', run: () => this.setState({ keysOpen: true }) },
       { name:'Import from ~/.ssh/config', hint:'hosts', icon:'⤓', color:'#6ea8ff', run: () => this.importSshConfig() },
       { name: (s.broadcast ? 'Broadcast input: ON — turn off' : 'Broadcast input to all panes'), hint:'cluster', icon:'⇉', color:'#ff7a59', run: () => this.toggleBroadcast() },
       { name:'Open dashboard', hint:'⌘1', icon:'⊞', color:'#6ea8ff', run: () => this.setState({ view:'dashboard' }) },
@@ -2277,7 +2376,7 @@ export default class App extends React.Component<any, any> {
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
         cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.5)' : '#1c1c24'), boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none', borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
         onConnect: () => this.connectHost(h),
-        onEdit: (e) => { e.stopPropagation(); this.openEditHost(h); },
+        onEdit: (e) => { e.stopPropagation(); void this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
         onExport: (e) => { e.stopPropagation(); this.exportHost(h); },
         isLocal: !h.connId, // not yet synced to a team/vault
@@ -2450,6 +2549,15 @@ export default class App extends React.Component<any, any> {
       keyModeFile: f.keyMode === 'file', keyModeText: f.keyMode === 'text',
       keyFileStyle: subSegStyle(f.keyMode === 'file'), keyTextStyle: subSegStyle(f.keyMode === 'text'),
       setKeyModeFile: () => this.setField('keyMode', 'file'), setKeyModeText: () => this.setField('keyMode', 'text'),
+      // Key Vault: a 3rd key source (pick a saved key) + "save this pasted key" name field.
+      keyModeVault: f.keyMode === 'vault', keyVaultStyle: subSegStyle(f.keyMode === 'vault'),
+      setKeyModeVault: () => this.setField('keyMode', 'vault'),
+      vaultKeyOptions: s.vaultKeys.map(k => ({ id: k.id, label: k.name + ' · ' + k.label })),
+      fVaultKeyId: f.vaultKeyId || '',
+      onPickVaultKey: (e) => { const id = e.target.value; if (id) void this.pickVaultKey(id); else this.setField('vaultKeyId', ''); },
+      fSaveKeyName: f.saveKeyName || '',
+      onFSaveKeyName: (e) => this.setField('saveKeyName', e.target.value),
+      openKeys: () => this.setState({ keysOpen: true, addHostOpen: false }),
       onFKeyText: (e) => this.setField('keyText', e.target.value),
       keyShowStatus: f.keyText.trim().length > 0,
       keyStatusIcon: keyStateIcon, keyStatusMsg: keyVal.message,
@@ -3095,6 +3203,15 @@ export default class App extends React.Component<any, any> {
         )}
 
         {/* WHAT'S NEW */}
+        {this.state.keysOpen && (
+          <KeyVaultModal
+            keys={this.state.vaultKeys}
+            onAdd={(n: string, k: string, p: string) => this.addVaultKey(n, k, p)}
+            onDelete={(id: string) => this.deleteVaultKey(id)}
+            onReveal={(id: string) => this.revealVaultKey(id)}
+            onClose={() => this.setState({ keysOpen: false })}
+          />
+        )}
         {v.whatsNewOpen && (
           <div onClick={v.closeWhatsNew} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:40px;z-index:66;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:470px;max-width:96%;max-height:80vh;display:flex;flex-direction:column;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
@@ -3218,6 +3335,7 @@ export default class App extends React.Component<any, any> {
                       <div style={css("display:flex;gap:6px;padding:4px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;")}>
                         <div onClick={v.setKeyModeFile} style={v.keyFileStyle}>File path</div>
                         <div onClick={v.setKeyModeText} style={v.keyTextStyle}>Paste text</div>
+                        <div onClick={v.setKeyModeVault} style={v.keyVaultStyle}>Saved key</div>
                       </div>
                       {v.keyModeFile && (
                         <div style={css("display:flex;flex-direction:column;gap:9px;")}>
@@ -3238,6 +3356,23 @@ export default class App extends React.Component<any, any> {
                             </div>
                           )}
                           <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;margin-top:9px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                          <Hov as="input" value={v.fSaveKeyName} onChange={v.onFSaveKeyName} placeholder="Save to Key Vault as… (optional name)" spellCheck={false} s="width:100%;margin-top:9px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:12.5px;outline:none;" f="border-color:rgba(70,217,160,.5);" />
+                        </div>
+                      )}
+                      {v.keyModeVault && (
+                        <div style={css("display:flex;flex-direction:column;gap:9px;")}>
+                          {v.vaultKeyOptions.length === 0 ? (
+                            <div style={css("font-size:11.5px;color:#6a6a74;padding:11px 13px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;")}>No saved keys yet — paste a key and name it to save one.</div>
+                          ) : (
+                            <>
+                              <select value={v.fVaultKeyId} onChange={v.onPickVaultKey} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")}>
+                                <option value="">Choose a saved key…</option>
+                                {v.vaultKeyOptions.map((k) => (<option key={k.id} value={k.id}>{k.label}</option>))}
+                              </select>
+                              <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                            </>
+                          )}
+                          <div onClick={v.openKeys} style={css("font-size:11px;color:#46d9a0;cursor:pointer;")}>Manage saved keys →</div>
                         </div>
                       )}
                     </div>
