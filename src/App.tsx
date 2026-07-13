@@ -793,7 +793,7 @@ export default class App extends React.Component<any, any> {
     vaultKeys: [], // [{ id, name, label, createdAt }] — private key text lives in the keychain (key:<id>)
     keysOpen: false, // Key Vault modal
     form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', vaultKeyId:'', saveKeyName:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
-    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsApiUrl:'', teamsEmail:'' },
+    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsEmail:'' },
     activeTabId: 't1',
     activePaneId: 'p1',
     connecting: null,
@@ -1693,9 +1693,9 @@ export default class App extends React.Component<any, any> {
     if (secret) secretSet(id, secret);
     setTimeout(() => this.setState((s) => (s.newHostId === id ? { newHostId: null } : {})), 2200);
   }
-  // Persist the Teams sign-in convenience fields (server URL + email). Never the password.
-  rememberTeams(apiUrl, email) {
-    this.setState((s) => ({ settings: { ...s.settings, teamsApiUrl: apiUrl, teamsEmail: email } }));
+  // Persist the Teams sign-in convenience field (email). Never the password. The backend URL is fixed.
+  rememberTeams(email) {
+    this.setState((s) => ({ settings: { ...s.settings, teamsEmail: email } }));
   }
   // Import a decrypted team connection into the local host list. Stays on the Teams view so
   // several can be imported in a row; re-importing the same host (same folder/addr/user/port)
@@ -2513,7 +2513,7 @@ export default class App extends React.Component<any, any> {
       goTeams: () => this.setView('teams'),
       teamNudge: !s.settings.teamNudgeDismissed,
       dismissTeamNudge: () => this.setState(st => ({ settings: { ...st.settings, teamNudgeDismissed: true } })),
-      teamsDefaults: { apiUrl: s.settings.teamsApiUrl || '', email: s.settings.teamsEmail || '' },
+      teamsDefaults: { email: s.settings.teamsEmail || '' },
 
       // dashboard
       allFolder, folders, allTags, groups,
@@ -2769,7 +2769,7 @@ export default class App extends React.Component<any, any> {
                 <TeamsPanel
                   isTauri={isTauri}
                   defaults={v.teamsDefaults}
-                  onRemember={(apiUrl, email) => this.rememberTeams(apiUrl, email)}
+                  onRemember={(email) => this.rememberTeams(email)}
                   onImport={(args) => this.importTeamHost(args)}
                   onSync={(force) => this.syncAllTeams(force)}
                   onGoDashboard={() => this.setView('dashboard')}
